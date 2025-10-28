@@ -5,6 +5,8 @@ from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
 from services.chat_service import ChatService, Broadcaster
 from db import get_session
+from services.transcription_service import TranscriptionService
+
 
 class Container(containers.DeclarativeContainer):
     """
@@ -46,6 +48,10 @@ class Container(containers.DeclarativeContainer):
         ChatService,
         message_repo=message_repo,
         broadcaster=broadcaster
+    )
+
+    transcription_service: providers.Singleton[TranscriptionService] = providers.Singleton(
+        TranscriptionService
     )
 
 # Создаем единственный экземпляр контейнера для всего приложения

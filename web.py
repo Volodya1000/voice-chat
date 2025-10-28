@@ -28,13 +28,9 @@ router = APIRouter()
 
 COOKIE_NAME = "chat_user_id"
 
-# ---------------------------------------------------------------------
-# ИНИЦИАЛИЗАЦИЯ ЭКЗЕМПЛЯРА СЕРВИСА
-# В рабочей архитектуре Dependency Injector (DI) это должно делаться в containers.py
-# ---------------------------------------------------------------------
 transcription_service_instance = TranscriptionService()
 
-def get_current_user_id_from_request(request: Request) -> Optional[int]: # <-- ИСПРАВЛЕН ТИП (int | None)
+def get_current_user_id_from_request(request: Request) -> Optional[int]:
     cookie = request.cookies.get(COOKIE_NAME)
     if not cookie:
         return None
@@ -128,38 +124,31 @@ async def send_message(
 
     return Response(status_code=204)
 
-# ---------------------------------------------------------------------
-# ЭНДПОИНТ ДЛЯ ТРАНСКРИПЦИИ АУДИО
-# ---------------------------------------------------------------------
+# ЭНДПОИНТ ДЛЯ ТРАНСКРИПЦИИ АУДИО-
 @router.post("/chats/transcribe_voice")
+@inject
 async def transcribe_voice(
         request: Request,
         audio_file: UploadFile = File(...),
-        transcription_service: TranscriptionService = Depends(lambda: transcription_service_instance)
+        transcription_service: TranscriptionService = Depends(Provide[Container.transcription_service])
 ):
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Проверка MIME-типа
     if not audio_file.content_type or not audio_file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Uploaded file is not an audio file.")
 
     try:
-        # Вызов сервиса транскрипции
         user_prompt = await transcription_service.transcribe_audio(audio_file)
-
-        # Возвращаем транскрибированный текст на фронтенд
         return JSONResponse({"content": user_prompt})
     except HTTPException as e:
         raise e
     except Exception as e:
-        # В случае не-HTTPException ошибок
         print(f"Transcription error: {e}")
         raise HTTPException(status_code=500, detail=f"Критическая ошибка обработки аудио: {e}")
 
 
-# --- ОБНОВЛЕННЫЙ ЭНДПОИНТ SSE ---
 @router.get("/chats/{chat_id}/events")
 @inject
 async def sse_chat_events(
@@ -179,7 +168,6 @@ async def sse_chat_events(
                 # Ждем новое событие (словарь) из очереди
                 event_data_dict = await queue.get()
 
-                # event_data_dict УЖЕ имеет формат {"event": "...", "data": "..."}
                 yield event_data_dict
 
         except asyncio.CancelledError:
