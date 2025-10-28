@@ -1,0 +1,10 @@
+fastapi==0.120.1
+pydantic==2.12.3
+SQLAlchemy==2.0.35
+uvicorn==0.38.0
+aiosqlite
+python-multipart
+
+
+langchain-ollama
+langchain
