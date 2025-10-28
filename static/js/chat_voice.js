@@ -1,10 +1,16 @@
-export async function setupVoiceRecorder(recordButton, voiceIcon, messageInput, loadingIndicator, loadingText) {
+// chat_voice.js
+export async function setupVoiceRecorder(recordButton, voiceIcon, messageInput, loadingIndicator, loadingText, playButton) {
   let mediaRecorder, audioChunks = [], isRecording = false;
+  let lastAudioBlob = null; // для воспроизведения последнего аудио
 
+  // --- Функция загрузки аудио на сервер ---
   const uploadAudio = async () => {
     if (!audioChunks.length) return;
+
     const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+    lastAudioBlob = audioBlob; // сохраняем для прослушивания
     audioChunks = [];
+
     if (loadingText) loadingText.textContent = 'Обработка аудио локальной моделью...';
     if (loadingIndicator) loadingIndicator.style.display = 'flex';
     if (recordButton) recordButton.disabled = true;
@@ -20,6 +26,7 @@ export async function setupVoiceRecorder(recordButton, voiceIcon, messageInput, 
         alert(`Ошибка транскрипции: ${err.detail || resp.statusText}`);
         return;
       }
+
       const data = await resp.json();
       const transcription = data.content || "";
       if (messageInput) {
@@ -38,11 +45,13 @@ export async function setupVoiceRecorder(recordButton, voiceIcon, messageInput, 
     }
   };
 
+  // --- Инициализация MediaRecorder ---
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = uploadAudio;
+
     if (recordButton) recordButton.disabled = false;
   } catch (err) {
     console.error('Mic access denied', err);
@@ -52,20 +61,36 @@ export async function setupVoiceRecorder(recordButton, voiceIcon, messageInput, 
     }
   }
 
-  if (!recordButton) return;
-  recordButton.addEventListener('click', () => {
-    if (!mediaRecorder || recordButton.disabled) return;
-    if (isRecording) {
-      mediaRecorder.stop();
-      recordButton.classList.remove('recording');
-      voiceIcon.textContent = '⚙️';
-      isRecording = false;
-    } else {
-      audioChunks = [];
-      mediaRecorder.start();
-      recordButton.classList.add('recording');
-      voiceIcon.textContent = '🔴';
-      isRecording = true;
-    }
-  });
+  // --- Обработчик кнопки записи ---
+  if (recordButton) {
+    recordButton.addEventListener('click', () => {
+      if (!mediaRecorder || recordButton.disabled) return;
+
+      if (isRecording) {
+        mediaRecorder.stop();
+        recordButton.classList.remove('recording');
+        voiceIcon.textContent = '⚙️';
+        isRecording = false;
+      } else {
+        audioChunks = [];
+        mediaRecorder.start();
+        recordButton.classList.add('recording');
+        voiceIcon.textContent = '🔴';
+        isRecording = true;
+      }
+    });
+  }
+
+  // --- Обработчик кнопки воспроизведения последнего аудио ---
+  if (playButton) {
+    playButton.addEventListener('click', () => {
+      if (!lastAudioBlob) {
+        alert("Нет записанного аудио для воспроизведения.");
+        return;
+      }
+      const audioUrl = URL.createObjectURL(lastAudioBlob);
+      const audio = new Audio(audioUrl);
+      audio.play();
+    });
+  }
 }

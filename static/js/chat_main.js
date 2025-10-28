@@ -14,9 +14,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const voiceIcon = document.getElementById('voice-icon');
   const loadingIndicator = document.getElementById('loading-indicator');
   const loadingText = document.getElementById('loading-text');
+  const playButton = document.getElementById('play-audio-button'); // кнопка воспроизведения
 
   scrollToBottom(messageList);
   setupSendForm(sendForm, messageInput, selectedChatId);
   setupSSE(selectedChatId, messageList, addMessageToDOM, appendTokenToMessage);
-  setupVoiceRecorder(recordButton, voiceIcon, messageInput, loadingIndicator, loadingText);
+  setupVoiceRecorder(recordButton, voiceIcon, messageInput, loadingIndicator, loadingText, playButton);
 });
