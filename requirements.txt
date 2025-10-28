@@ -10,3 +10,6 @@ langchain-ollama
 langchain
 
 dependency-injector
+
+pydub
+faster-whisper

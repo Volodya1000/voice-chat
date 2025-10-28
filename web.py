@@ -1,12 +1,11 @@
-# web.py
 from fastapi import (
     APIRouter, Request, Depends, Form,
-    HTTPException,BackgroundTasks
+    HTTPException,BackgroundTasks, UploadFile, File # <-- ИСПРАВЛЕНО
 )
 # --- НОВЫЙ КОД ---
 from fastapi.responses import (
     RedirectResponse, HTMLResponse,
-    Response, JSONResponse # <-- ИЗМЕНЕНО
+    Response, JSONResponse
 )
 # Это зависимость из `pip install sse-starlette`
 from sse_starlette.sse import EventSourceResponse
@@ -19,12 +18,30 @@ from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
 # Импортируем Broadcaster для внедрения в SSE-эндпоинт
-from services.chat_service import ChatService, Broadcaster # <-- ИЗМЕНЕНО
+from services.chat_service import ChatService, Broadcaster 
+from services.transcription_service import TranscriptionService # <-- ИМПОРТ СЕРВИСА
 from models import MessageType
+from typing import Optional # <-- ДОБАВЛЕНО для type hinting
+
 templates = Jinja2Templates(directory="templates")
 router = APIRouter()
 
 COOKIE_NAME = "chat_user_id"
+
+# ---------------------------------------------------------------------
+# ИНИЦИАЛИЗАЦИЯ ЭКЗЕМПЛЯРА СЕРВИСА
+# В рабочей архитектуре Dependency Injector (DI) это должно делаться в containers.py
+# ---------------------------------------------------------------------
+transcription_service_instance = TranscriptionService()
+
+def get_current_user_id_from_request(request: Request) -> Optional[int]: # <-- ИСПРАВЛЕН ТИП (int | None)
+    cookie = request.cookies.get(COOKIE_NAME)
+    if not cookie:
+        return None
+    try:
+        return int(cookie)
+    except Exception:
+        return None
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -35,22 +52,13 @@ async def index(request: Request):
 async def login(
     request: Request,
     username: str = Form(...),
-    password: str | None = Form(None),
+    password: Optional[str] = Form(None), # <-- ИСПРАВЛЕН ТИП
     ur: UserRepository = Depends(Provide[Container.user_repo])
 ):
     user = await ur.ensure_user(username, password)
     redirect = RedirectResponse(url="/chats", status_code=302)
     redirect.set_cookie(COOKIE_NAME, str(user.id), max_age=60*60*24*30, httponly=True)
     return redirect
-
-def get_current_user_id_from_request(request: Request) -> int | None:
-    cookie = request.cookies.get(COOKIE_NAME)
-    if not cookie:
-        return None
-    try:
-        return int(cookie)
-    except Exception:
-        return None
 
 @router.get("/logout")
 async def logout(request: Request):
@@ -103,7 +111,7 @@ async def open_chat(
 async def send_message(
         request: Request,
         chat_id: int,
-        background_tasks: BackgroundTasks, # <-- ДОБАВЛЕНО
+        background_tasks: BackgroundTasks, 
         content: str = Form(...),
         chat_service: ChatService = Depends(Provide[Container.chat_service])
 ):
@@ -111,21 +119,44 @@ async def send_message(
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # --- ИЗМЕНЕНО ---
-    # Не ждем (await) выполнения, а добавляем в фоновые задачи.
-    # Сервис сам сохранит, запустит LLM и будет публиковать в SSE.
-    # Мы передаем user_id, т.к. он нужен для сохранения сообщения
     background_tasks.add_task(
         chat_service.process_user_message,
         chat_id=chat_id,
         content=content,
         user_id=user_id
     )
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-    # Немедленно возвращаем "204 No Content".
     return Response(status_code=204)
-# --- КОНЕЦ ОБНОВЛЕНИЯ ---
+
+# ---------------------------------------------------------------------
+# ЭНДПОИНТ ДЛЯ ТРАНСКРИПЦИИ АУДИО
+# ---------------------------------------------------------------------
+@router.post("/chats/transcribe_voice")
+async def transcribe_voice(
+        request: Request,
+        audio_file: UploadFile = File(...),
+        transcription_service: TranscriptionService = Depends(lambda: transcription_service_instance)
+):
+    user_id = get_current_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Проверка MIME-типа
+    if not audio_file.content_type or not audio_file.content_type.startswith("audio/"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not an audio file.")
+
+    try:
+        # Вызов сервиса транскрипции
+        user_prompt = await transcription_service.transcribe_audio(audio_file)
+
+        # Возвращаем транскрибированный текст на фронтенд
+        return JSONResponse({"content": user_prompt})
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        # В случае не-HTTPException ошибок
+        print(f"Transcription error: {e}")
+        raise HTTPException(status_code=500, detail=f"Критическая ошибка обработки аудио: {e}")
 
 
 # --- ОБНОВЛЕННЫЙ ЭНДПОИНТ SSE ---
@@ -139,8 +170,6 @@ async def sse_chat_events(
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    # (Тут все еще нужна проверка, что user_id имеет доступ к chat_id)
 
     async def event_generator():
         """Генератор, который слушает очередь и отправляет данные клиенту."""
