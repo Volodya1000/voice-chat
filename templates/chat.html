@@ -2,6 +2,66 @@
 {% block title %}Чаты{% endblock %}
 
 {% block body %}
+<style>
+    /* -------------------------------------- */
+    /* Стилизация для голосового ввода */
+    /* -------------------------------------- */
+    .send-form {
+        display: flex;
+        align-items: center;
+        padding: 10px;
+        background-color: #fff;
+        border-top: 1px solid #ddd;
+    }
+    .send-form input {
+        flex-grow: 1;
+        margin-right: 10px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-size: 16px;
+    }
+    .send-form button[type="submit"] {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+    .send-form button[type="submit"]:hover {
+        background-color: #0056b3;
+    }
+
+    #voice-record-button {
+        background-color: #f8f9fa;
+        border: 1px solid #ced4da;
+        border-radius: 5px;
+        cursor: pointer;
+        padding: 8px 12px;
+        font-size: 18px;
+        line-height: 1;
+        transition: background-color 0.2s, color 0.2s;
+        margin-right: 10px;
+    }
+    #voice-record-button:hover {
+        background-color: #e2e6ea;
+    }
+    #voice-record-button.recording {
+        color: white;
+        background-color: #dc3545; /* Красный цвет во время записи */
+        animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+    }
+    /* Добавьте сюда остальные ваши стили для layout, sidebar, chat-area, message и т.д. */
+    /* Это просто примеры стилей для новой функциональности */
+</style>
+
 <div class="layout">
     <aside class="sidebar">
         <h3>Чаты</h3>
@@ -38,6 +98,9 @@
 
             <form id="send-form" class="send-form">
                 <input name="content" id="message-input" placeholder="Введите сообщение..." required/>
+                <button type="button" id="voice-record-button" title="Голосовой ввод (Web Speech API)">
+                    <span id="voice-icon">🎤</span>
+                </button>
                 <button type="submit">Отправить</button>
             </form>
         {% else %}
@@ -55,7 +118,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const selectedChatId = {{ selected_chat }};
 
     function scrollToBottom() {
-        messageList.scrollTop = messageList.scrollHeight;
+        if (messageList) {
+            messageList.scrollTop = messageList.scrollHeight;
+        }
     }
 
     function addMessageToDOM(message) {
@@ -106,14 +171,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (!response.ok) {
                 console.error("Failed to send message", await response.json());
+                // Возвращаем текст в поле, если отправка не удалась
                 messageInput.value = originalContent;
             }
         } catch (error) {
             console.error("Error sending message:", error);
+            // Возвращаем текст в поле, если ошибка сети
             messageInput.value = originalContent;
         }
     });
 
+    // Инициализация EventSource для SSE
     const eventSource = new EventSource(`/chats/${selectedChatId}/events`);
 
     eventSource.addEventListener("new_message", (event) => {
@@ -132,6 +200,92 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     scrollToBottom();
+
+    // ------------------------------------------------------------------
+    // НОВАЯ ЛОГИКА ГОЛОСОВОГО ВВОДА (Speech-to-Text)
+    // ------------------------------------------------------------------
+
+    const recordButton = document.getElementById('voice-record-button');
+    const voiceIcon = document.getElementById('voice-icon');
+
+    // Проверка поддержки Web Speech API
+    // Используем window.SpeechRecognition для лучшей совместимости (если не определен webkit)
+    window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!window.SpeechRecognition) {
+        recordButton.disabled = true;
+        recordButton.title = "Голосовой ввод не поддерживается в вашем браузере.";
+        console.warn("Web Speech API not supported.");
+    } else {
+        const recognition = new window.SpeechRecognition();
+
+        // Настройки для многократного ввода
+        recognition.continuous = false; // Отключаем непрерывность, чтобы останавливаться после паузы
+        recognition.interimResults = false; // Нам нужны только окончательные результаты
+        recognition.lang = 'ru-RU'; // Устанавливаем русский язык
+
+        let isListening = false;
+        let finalTranscript = ''; // Для сохранения предыдущих транскрипций
+
+        recordButton.addEventListener('click', () => {
+            if (isListening) {
+                // Остановка записи
+                recognition.stop();
+            } else {
+                // Начало записи
+                // Сохраняем текущее содержимое поля ввода (включая пробел)
+                finalTranscript = messageInput.value.trim();
+                if (finalTranscript.length > 0) {
+                    finalTranscript += ' ';
+                }
+
+                recognition.start();
+                recordButton.classList.add('recording');
+                voiceIcon.textContent = '🔴';
+                isListening = true;
+            }
+        });
+
+        recognition.onresult = (event) => {
+            let currentTranscript = '';
+
+            // Перебираем все полученные результаты
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    // Если это окончательный результат, обрабатываем его
+                    currentTranscript += event.results[i][0].transcript;
+                }
+            }
+
+            // Заменяем содержимое поля, добавляя новый распознанный текст к предыдущему
+            messageInput.value = finalTranscript + currentTranscript;
+
+        };
+
+        recognition.onend = () => {
+            // Срабатывает, когда распознавание завершено
+            recordButton.classList.remove('recording');
+            voiceIcon.textContent = '🎤';
+            isListening = false;
+
+            // Обновляем finalTranscript на то, что сейчас в поле ввода
+            finalTranscript = messageInput.value.trim();
+            if (finalTranscript.length > 0) {
+                messageInput.value += ' '; // Добавляем пробел для следующего ввода
+            }
+
+            messageInput.focus();
+        };
+
+        recognition.onerror = (event) => {
+            console.error('Ошибка распознавания речи: ' + event.error);
+            recordButton.classList.remove('recording');
+            voiceIcon.textContent = '🎤';
+            isListening = false;
+            alert(`Ошибка голосового ввода: ${event.error}. Убедитесь, что у вас есть микрофон и вы дали разрешение браузеру.`);
+        };
+    }
+    // ------------------------------------------------------------------
 });
 </script>
 {% endif %}
