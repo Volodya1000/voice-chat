@@ -1,7 +1,7 @@
 # web.py
 from fastapi import (
     APIRouter, Request, Depends, Form,
-    HTTPException # <-- ДОБАВЛЕНО
+    HTTPException,BackgroundTasks
 )
 # --- НОВЫЙ КОД ---
 from fastapi.responses import (
@@ -101,78 +101,61 @@ async def open_chat(
 @router.post("/chats/{chat_id}/send")
 @inject
 async def send_message(
-    request: Request,
-    chat_id: int,
-    content: str = Form(...),
-    chat_service: ChatService = Depends(Provide[Container.chat_service])
+        request: Request,
+        chat_id: int,
+        background_tasks: BackgroundTasks, # <-- ДОБАВЛЕНО
+        content: str = Form(...),
+        chat_service: ChatService = Depends(Provide[Container.chat_service])
 ):
     user_id = get_current_user_id_from_request(request)
     if not user_id:
-        return RedirectResponse(url="/", status_code=302)
-
-    await chat_service.process_user_message(chat_id, content)
-
-    return RedirectResponse(url=f"/chats/{chat_id}", status_code=302)
-
-@router.post("/chats/{chat_id}/send")
-@inject
-async def send_message(
-    request: Request,
-    chat_id: int,
-    content: str = Form(...),
-    chat_service: ChatService = Depends(Provide[Container.chat_service])
-):
-    user_id = get_current_user_id_from_request(request)
-    if not user_id:
-        # --- ИЗМЕНЕНО ---
-        # Для AJAX-запроса (fetch) редирект бесполезен,
-        # возвращаем ошибку 401
         raise HTTPException(status_code=401, detail="Not authenticated")
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-    # Вызываем сервис. Он сам сохранит и опубликует сообщения (USER и MODEL)
-    await chat_service.process_user_message(chat_id, content)
 
     # --- ИЗМЕНЕНО ---
-    # Вместо редиректа возвращаем "204 No Content".
-    # Клиент (JS) знает, что все прошло успешно.
-    return Response(status_code=204)
+    # Не ждем (await) выполнения, а добавляем в фоновые задачи.
+    # Сервис сам сохранит, запустит LLM и будет публиковать в SSE.
+    # Мы передаем user_id, т.к. он нужен для сохранения сообщения
+    background_tasks.add_task(
+        chat_service.process_user_message,
+        chat_id=chat_id,
+        content=content,
+        user_id=user_id
+    )
     # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
+    # Немедленно возвращаем "204 No Content".
+    return Response(status_code=204)
+# --- КОНЕЦ ОБНОВЛЕНИЯ ---
 
-# --- НОВЫЙ ЭНДПОИНТ ДЛЯ SSE ---
+
+# --- ОБНОВЛЕННЫЙ ЭНДПОИНТ SSE ---
 @router.get("/chats/{chat_id}/events")
 @inject
 async def sse_chat_events(
-    request: Request,
-    chat_id: int,
-    # Внедряем наш Singleton Broadcaster
-    broadcaster: Broadcaster = Depends(Provide[Container.broadcaster])
+        request: Request,
+        chat_id: int,
+        broadcaster: Broadcaster = Depends(Provide[Container.broadcaster])
 ):
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Здесь в production-коде нужно проверить,
-    # имеет ли `user_id` доступ к `chat_id`,
-    # прежде чем подписывать его.
+    # (Тут все еще нужна проверка, что user_id имеет доступ к chat_id)
 
     async def event_generator():
         """Генератор, который слушает очередь и отправляет данные клиенту."""
         queue = await broadcaster.subscribe(chat_id)
         try:
             while True:
-                # Ждем новое сообщение из очереди
-                message_json = await queue.get()
-                # Отправляем его клиенту в формате SSE
-                yield {
-                    "event": "message", # Имя события (для onmessage в JS)
-                    "data": message_json
-                }
+                # Ждем новое событие (словарь) из очереди
+                event_data_dict = await queue.get()
+
+                # event_data_dict УЖЕ имеет формат {"event": "...", "data": "..."}
+                yield event_data_dict
+
         except asyncio.CancelledError:
-            # Клиент отключился (закрыл вкладку)
+            # Клиент отключился
             broadcaster.unsubscribe(chat_id, queue)
             raise
 
-    # EventSourceResponse будет держать соединение открытым
     return EventSourceResponse(event_generator())

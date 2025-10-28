@@ -10,6 +10,7 @@ class MessageType(enum.Enum):
     USER = "user"
     MODEL = "model"
 
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -17,6 +18,7 @@ class User(Base):
     password = Column(String(256), nullable=True)  # можно хранить хэш (опционально)
 
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan", lazy="selectin")
+
 
 class Chat(Base):
     __tablename__ = "chats"
@@ -26,7 +28,9 @@ class Chat(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     user = relationship("User", back_populates="chats", lazy="joined")
-    messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", lazy="selectin", order_by="Message.created_at")
+    messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan", lazy="selectin",
+                            order_by="Message.created_at")
+
 
 class Message(Base):
     __tablename__ = "messages"
@@ -35,5 +39,8 @@ class Message(Base):
     message_type = Column(Enum(MessageType), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     chat_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+
+    # --- НОВАЯ КОЛОНКА ---
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     chat = relationship("Chat", back_populates="messages", lazy="joined")
