@@ -1,0 +1,11 @@
+<div class="messages" id="message-list">
+  {% for m in messages %}
+    <div class="message {{ m.message_type.value }}" data-id="{{ m.id }}">
+      <div class="m-meta">
+        <strong>{{ m.message_type.value }}</strong>
+        <span class="time">{{ m.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+      </div>
+      <div class="m-body">{{ m.content }}</div>
+    </div>
+  {% endfor %}
+</div>

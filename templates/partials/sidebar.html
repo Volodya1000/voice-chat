@@ -1,0 +1,18 @@
+<aside class="sidebar">
+  <h3>Чаты</h3>
+  <ul class="chat-list">
+    {% for c in chats %}
+      <li class="chat-item {% if selected_chat and c.id == selected_chat %}active{% endif %}">
+        <a href="/chats/{{ c.id }}">{{ c.title }}</a>
+        <div class="meta">{{ c.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+
+  <form method="post" action="/chats/new" class="new-chat-form">
+    <input name="title" placeholder="Новый чат" required/>
+    <button type="submit">Создать</button>
+  </form>
+
+  <a href="/logout">Выйти</a>
+</aside>

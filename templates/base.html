@@ -1,15 +1,19 @@
-<!-- templates/base.html -->
 <!doctype html>
 <html lang="ru">
 <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>{% block title %}Chat App{% endblock %}</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}{% endblock %} — MyChat</title>
+
+  <!-- Подключаем общий CSS из static -->
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/chat.css') }}">
+  {% block head %}{% endblock %}
 </head>
 <body>
-    <div class="container">
-        {% block body %}{% endblock %}
-    </div>
+  {% block body %}{% endblock %}
+
+  <!-- Скрипт внизу страницы -->
+  <script src="{{ request.url_for('static', path='js/chat.js') }}"></script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

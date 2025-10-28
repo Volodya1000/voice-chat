@@ -7,6 +7,9 @@ from web import router as web_router
 from fastapi.staticfiles import StaticFiles
 from containers import container
 from contextlib import asynccontextmanager
+import api as api_module
+import web as web_module
+import services.chat_service as chat_service_module
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -17,7 +20,7 @@ app = FastAPI(title="Async Chat App with DTOs & Repositories", lifespan=lifespan
 
 # Подключаем контейнер к модулям.
 # Это необходимо, чтобы декоратор @inject заработал.
-container.wire(modules=["api", "web", "services.chat_service"])
+container.wire(modules=[api_module, web_module, chat_service_module])
 
 app.include_router(api_router)
 app.include_router(web_router)
