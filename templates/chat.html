@@ -27,9 +27,10 @@
 <script>
   window.__CHAT_CONTEXT = {
     selected_chat: {{ selected_chat|tojson }},
-    // если нужно — можно добавить начальные сообщения в JSON
-    // initial_messages: {{ messages|tojson }}
-  }
+    // безопасно: если переменной нет — будет пустой список
+    initial_messages: {{ initial_messages|default([])|tojson }}
+  };
 </script>
 {% endif %}
+
 {% endblock %}

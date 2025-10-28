@@ -7,6 +7,7 @@ class MessageTypeStr(str, Enum):
     USER = "user"
     MODEL = "model"
 
+
 # ======================
 # Input DTOs
 # ======================
@@ -33,6 +34,10 @@ class MessageDTO(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @property
+    def message_type_value(self):
+        return self.message_type.value
 
 class ChatDTO(BaseModel):
     id: int

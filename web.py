@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import (
     APIRouter, Request, Depends, Form,
     HTTPException,BackgroundTasks, UploadFile, File # <-- ИСПРАВЛЕНО
@@ -14,6 +16,7 @@ import asyncio
 from fastapi.templating import Jinja2Templates
 from dependency_injector.wiring import inject, Provide
 from containers import Container
+from dtos import MessageDTO
 from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
@@ -98,16 +101,44 @@ async def open_chat(
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         return RedirectResponse(url="/", status_code=302)
+
     chats = await cr.list_chats_for_user(user_id)
-    messages = await mr.get_messages_for_chat(chat_id)
-    return templates.TemplateResponse("chat.html", {"request": request, "user_id": user_id, "chats": chats, "selected_chat": chat_id, "messages": messages})
+    messages_raw = await mr.get_messages_for_chat(chat_id)  # SQLAlchemy objects
+
+    # Pydantic модели для серверного рендера (с datetime)
+    messages_for_render = [MessageDTO.model_validate(m) for m in messages_raw]
+
+    # JSON-safe словари для JS (datetime -> ISO строки и т.д.)
+    initial_messages = [
+        {
+            "id": m.id,
+            "content": m.content,
+            "message_type": m.message_type.value,
+            "created_at": m.created_at.isoformat() if isinstance(m.created_at, datetime) else str(m.created_at),
+        }
+        for m in messages_for_render
+    ]
+
+    return templates.TemplateResponse(
+        "chat.html",
+        {
+            "request": request,
+            "user_id": user_id,
+            "chats": chats,
+            "selected_chat": chat_id,
+            # messages — оставляем для partials/messages.html (ожидает datetime)
+            "messages": messages_for_render,
+            # initial_messages — для вставки в JS
+            "initial_messages": initial_messages,
+        }
+    )
 
 @router.post("/chats/{chat_id}/send")
 @inject
 async def send_message(
         request: Request,
         chat_id: int,
-        background_tasks: BackgroundTasks, 
+        background_tasks: BackgroundTasks,
         content: str = Form(...),
         chat_service: ChatService = Depends(Provide[Container.chat_service])
 ):
