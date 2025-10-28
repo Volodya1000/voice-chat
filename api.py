@@ -23,10 +23,9 @@ from models import MessageType
 router = APIRouter(prefix="/api")
 
 @router.post("/users", response_model=UserDTO)
-@inject  # 3. Добавляем декоратор
+@inject
 async def create_user(
     payload: UserCreateDTO,
-    # 4. Внедряем зависимость. Бойлерплейт код удален.
     ur: UserRepository = Depends(Provide[Container.user_repo])
 ):
     existing = await ur.get_by_username(payload.username)

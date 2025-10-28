@@ -1,18 +1,26 @@
 # web.py
-from fastapi import APIRouter, Request, Depends, Form
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi import (
+    APIRouter, Request, Depends, Form,
+    HTTPException # <-- ДОБАВЛЕНО
+)
+# --- НОВЫЙ КОД ---
+from fastapi.responses import (
+    RedirectResponse, HTMLResponse,
+    Response, JSONResponse # <-- ИЗМЕНЕНО
+)
+# Это зависимость из `pip install sse-starlette`
+from sse_starlette.sse import EventSourceResponse
+import asyncio
+# --- КОНЕЦ НОВОГО КОДА ---
 from fastapi.templating import Jinja2Templates
-# 1. Импортируем 'inject' и 'Provide'
 from dependency_injector.wiring import inject, Provide
-
-# 2. Импортируем наш контейнер и типы зависимостей
 from containers import Container
 from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
-from services.chat_service import ChatService
+# Импортируем Broadcaster для внедрения в SSE-эндпоинт
+from services.chat_service import ChatService, Broadcaster # <-- ИЗМЕНЕНО
 from models import MessageType
-
 templates = Jinja2Templates(directory="templates")
 router = APIRouter()
 
@@ -20,21 +28,18 @@ COOKIE_NAME = "chat_user_id"
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    # логин-страница
     return templates.TemplateResponse("index.html", {"request": request, "error": None})
 
 @router.post("/login")
-@inject  # 3. Добавляем декоратор
+@inject
 async def login(
     request: Request,
     username: str = Form(...),
     password: str | None = Form(None),
-    # 4. Внедряем зависимость
     ur: UserRepository = Depends(Provide[Container.user_repo])
 ):
     user = await ur.ensure_user(username, password)
     redirect = RedirectResponse(url="/chats", status_code=302)
-    # ставим cookie с user_id, чтобы не просить логин при перезапусках приложения
     redirect.set_cookie(COOKIE_NAME, str(user.id), max_age=60*60*24*30, httponly=True)
     return redirect
 
@@ -83,7 +88,6 @@ async def create_chat(
 async def open_chat(
     request: Request,
     chat_id: int,
-    # 5. Можно внедрять несколько зависимостей
     cr: ChatRepository = Depends(Provide[Container.chat_repo]),
     mr: MessageRepository = Depends(Provide[Container.message_repo])
 ):
@@ -100,8 +104,6 @@ async def send_message(
     request: Request,
     chat_id: int,
     content: str = Form(...),
-    # 6. Внедряем сервис. Его зависимости (message_repo)
-    # будут внедрены в него автоматически контейнером.
     chat_service: ChatService = Depends(Provide[Container.chat_service])
 ):
     user_id = get_current_user_id_from_request(request)
@@ -111,3 +113,66 @@ async def send_message(
     await chat_service.process_user_message(chat_id, content)
 
     return RedirectResponse(url=f"/chats/{chat_id}", status_code=302)
+
+@router.post("/chats/{chat_id}/send")
+@inject
+async def send_message(
+    request: Request,
+    chat_id: int,
+    content: str = Form(...),
+    chat_service: ChatService = Depends(Provide[Container.chat_service])
+):
+    user_id = get_current_user_id_from_request(request)
+    if not user_id:
+        # --- ИЗМЕНЕНО ---
+        # Для AJAX-запроса (fetch) редирект бесполезен,
+        # возвращаем ошибку 401
+        raise HTTPException(status_code=401, detail="Not authenticated")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    # Вызываем сервис. Он сам сохранит и опубликует сообщения (USER и MODEL)
+    await chat_service.process_user_message(chat_id, content)
+
+    # --- ИЗМЕНЕНО ---
+    # Вместо редиректа возвращаем "204 No Content".
+    # Клиент (JS) знает, что все прошло успешно.
+    return Response(status_code=204)
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ SSE ---
+@router.get("/chats/{chat_id}/events")
+@inject
+async def sse_chat_events(
+    request: Request,
+    chat_id: int,
+    # Внедряем наш Singleton Broadcaster
+    broadcaster: Broadcaster = Depends(Provide[Container.broadcaster])
+):
+    user_id = get_current_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Здесь в production-коде нужно проверить,
+    # имеет ли `user_id` доступ к `chat_id`,
+    # прежде чем подписывать его.
+
+    async def event_generator():
+        """Генератор, который слушает очередь и отправляет данные клиенту."""
+        queue = await broadcaster.subscribe(chat_id)
+        try:
+            while True:
+                # Ждем новое сообщение из очереди
+                message_json = await queue.get()
+                # Отправляем его клиенту в формате SSE
+                yield {
+                    "event": "message", # Имя события (для onmessage в JS)
+                    "data": message_json
+                }
+        except asyncio.CancelledError:
+            # Клиент отключился (закрыл вкладку)
+            broadcaster.unsubscribe(chat_id, queue)
+            raise
+
+    # EventSourceResponse будет держать соединение открытым
+    return EventSourceResponse(event_generator())

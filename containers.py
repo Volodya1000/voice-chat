@@ -3,7 +3,7 @@ from dependency_injector import containers, providers
 from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
-from services.chat_service import ChatService
+from services.chat_service import ChatService, Broadcaster
 from db import get_session
 
 class Container(containers.DeclarativeContainer):
@@ -40,13 +40,12 @@ class Container(containers.DeclarativeContainer):
         session=db_session,
     )
 
-    # 3. Сервисы
-    # Сервисы так же являются Factory.
-    # Мы "связываем" зависимость chat_service от message_repo
-    # с нашим провайдером message_repo.
+    broadcaster = providers.Singleton(Broadcaster)
+
     chat_service: providers.Factory[ChatService] = providers.Factory(
         ChatService,
         message_repo=message_repo,
+        broadcaster=broadcaster
     )
 
 # Создаем единственный экземпляр контейнера для всего приложения

@@ -23,20 +23,20 @@
 
     <main class="chat-area">
         {% if selected_chat %}
-            <div class="messages">
+            <div class="messages" id="message-list">
                 {% for m in messages %}
-                    <div class="message {{ m.message_type.value }}">
-                        <div class="m-meta">
-                            <strong>{{ m.message_type.value }}</strong>
-                            <span class="time">{{ m.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
-                        </div>
-                        <div class="m-body">{{ m.content }}</div>
+                <div class="message {{ m.message_type.value }}">
+                    <div class="m-meta">
+                        <strong>{{ m.message_type.value }}</strong>
+                        <span class="time">{{ m.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>
                     </div>
+                    <div class="m-body">{{ m.content }}</div>
+                </div>
                 {% endfor %}
             </div>
 
-            <form method="post" action="/chats/{{selected_chat}}/send" class="send-form">
-                <input name="content" placeholder="Введите сообщение..." required/>
+            <form id="send-form" class="send-form">
+                <input name="content" id="message-input" placeholder="Введите сообщение..." required/>
                 <button type="submit">Отправить</button>
             </form>
         {% else %}
@@ -44,4 +44,105 @@
         {% endif %}
     </main>
 </div>
+
+{% if selected_chat %}
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const messageList = document.getElementById("message-list");
+        const sendForm = document.getElementById("send-form");
+        const messageInput = document.getElementById("message-input");
+        // Передаем ID чата из Jinja2 в JavaScript
+        const selectedChatId = {{ selected_chat }};
+
+        // 1. Функция для прокрутки чата в самый низ
+        function scrollToBottom() {
+            messageList.scrollTop = messageList.scrollHeight;
+        }
+
+        // 2. Функция для рендеринга нового сообщения в DOM
+        function addMessageToDOM(message) {
+            // message - это JS-объект, распарсенный из JSON
+            // (например, { id: 1, content: "...", message_type: "USER", ... })
+
+            // Форматируем время (упрощенно)
+            const time = new Date(message.created_at).toLocaleString();
+
+            const messageDiv = document.createElement("div");
+            // Добавляем классы 'message' и 'USER' или 'MODEL'
+            messageDiv.classList.add("message", message.message_type);
+
+            // Собираем HTML для нового сообщения
+            messageDiv.innerHTML = `
+                <div class="m-meta">
+                    <strong>${message.message_type}</strong>
+                    <span class="time">${time}</span>
+                </div>
+                <div class="m-body">${message.content}</div>
+            `;
+
+            messageList.appendChild(messageDiv);
+            scrollToBottom(); // Прокручиваем вниз
+        }
+
+        // 3. Перехват отправки формы
+        sendForm.addEventListener("submit", async (e) => {
+            e.preventDefault(); // Предотвращаем перезагрузку страницы
+
+            const content = messageInput.value.trim();
+            if (!content) return; // Не отправляем пустые сообщения
+
+            // Сохраняем текст и очищаем поле ввода
+            const originalContent = content;
+            messageInput.value = "";
+
+            // Отправляем данные формы асинхронно (AJAX)
+            try {
+                const response = await fetch(`/chats/${selectedChatId}/send`, {
+                    method: "POST",
+                    headers: {
+                        // FastAPI Form(...) ожидает этот Content-Type
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    // Кодируем данные как form data
+                    body: new URLSearchParams({ content: content })
+                });
+
+                if (!response.ok) {
+                    // Если сервер вернул ошибку, выводим ее и возвращаем текст
+                    console.error("Failed to send message", await response.json());
+                    messageInput.value = originalContent;
+                }
+                // Если все ОК (статус 204), ничего делать не нужно.
+                // Сообщение (и ответ) придут через SSE.
+
+            } catch (error) {
+                console.error("Error sending message:", error);
+                messageInput.value = originalContent; // Возвращаем на случай сбоя сети
+            }
+        });
+
+        // 4. Подключение к Server-Sent Events (SSE)
+        console.log(`Connecting to SSE for chat ${selectedChatId}...`);
+        const eventSource = new EventSource(`/chats/${selectedChatId}/events`);
+
+        // 5. Обработчик входящих сообщений
+        eventSource.onmessage = (event) => {
+            console.log("SSE message received:", event.data);
+            // event.data - это JSON-строка, которую мы отправили
+            const message = JSON.parse(event.data);
+            addMessageToDOM(message);
+        };
+
+        // 6. Обработчик ошибок SSE
+        eventSource.onerror = (error) => {
+            console.error("SSE Error:", error);
+            // Можно попробовать переподключиться или показать ошибку
+            eventSource.close();
+        };
+
+        // 7. Прокрутка в самый низ при загрузке страницы
+        scrollToBottom();
+    });
+</script>
+{% endif %}
 {% endblock %}
