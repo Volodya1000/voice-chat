@@ -7,11 +7,13 @@ from fastapi import (
 # --- НОВЫЙ КОД ---
 from fastapi.responses import (
     RedirectResponse, HTMLResponse,
-    Response, JSONResponse
+    Response, JSONResponse,
+    StreamingResponse
 )
 # Это зависимость из `pip install sse-starlette`
 from sse_starlette.sse import EventSourceResponse
 import asyncio
+import io
 # --- КОНЕЦ НОВОГО КОДА ---
 from fastapi.templating import Jinja2Templates
 from dependency_injector.wiring import inject, Provide
@@ -25,7 +27,7 @@ from services.chat_service import ChatService, Broadcaster
 from services.transcription_service import TranscriptionService # <-- ИМПОРТ СЕРВИСА
 from models import MessageType
 from typing import Optional # <-- ДОБАВЛЕНО для type hinting
-
+from gtts import gTTS
 templates = Jinja2Templates(directory="templates")
 router = APIRouter()
 
@@ -207,3 +209,47 @@ async def sse_chat_events(
             raise
 
     return EventSourceResponse(event_generator())
+
+
+@router.post("/tts", response_class=StreamingResponse)
+async def text_to_speech(
+        request: Request,
+        text: str = Form(...),  # Получаем текст из формы
+):
+    """
+    Конвертирует переданный текст в MP3-аудио, используя gTTS,
+    и возвращает его как стрим.
+    """
+    user_id = get_current_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Text content is required.")
+
+    # 1. Создаем объект gTTS
+    try:
+        # Устанавливаем русский язык ('ru')
+        tts = gTTS(text=text, lang='ru')
+    except Exception as e:
+        print(f"gTTS initialization error: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка инициализации gTTS.")
+
+    # 2. Используем io.BytesIO для сохранения MP3 в памяти
+    audio_fp = io.BytesIO()
+    try:
+        tts.write_to_fp(audio_fp)
+        audio_fp.seek(0)  # Переводим указатель в начало потока
+    except Exception as e:
+        print(f"gTTS write error: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка генерации аудио.")
+
+    # 3. Возвращаем стрим MP3
+    return StreamingResponse(
+        audio_fp,
+        media_type="audio/mp3",
+        headers={
+            # Дополнительный заголовок для корректного имени файла (по желанию)
+            "Content-Disposition": "inline; filename=tts_audio.mp3"
+        }
+    )
