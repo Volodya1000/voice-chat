@@ -13,7 +13,8 @@
   {% block body %}{% endblock %}
 
   <!-- Скрипт внизу страницы -->
-  <script src="{{ request.url_for('static', path='js/chat.js') }}"></script>
+  <script type="module" src="{{ request.url_for('static', path='js/chat_main.js') }}"></script>
+
   {% block scripts %}{% endblock %}
 </body>
 </html>
