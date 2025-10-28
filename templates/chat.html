@@ -15,77 +15,8 @@
         <button type="submit">Отправить</button>
 
         <button id="play-audio-button" type="button">▶️ Прослушать последнее записанное аудио</button>
-
         <button id="tts-button" type="button">▶️ Озвучить текст</button>
       </form>
-
-      <script>
-      document.addEventListener('DOMContentLoaded', () => {
-          // Ищем новую кнопку по уникальному ID
-          const ttsButton = document.getElementById('tts-button');
-          // Старая кнопка (оставлена без изменений)
-          const oldPlayAudioButton = document.getElementById('play-audio-button');
-          const messageInput = document.getElementById('message-input');
-
-          // 1. Обработчик для кнопки "Озвучить текст" (TTS)
-          if (ttsButton && messageInput) {
-              ttsButton.addEventListener('click', async () => {
-                  const textToSpeak = messageInput.value.trim();
-
-                  if (textToSpeak.length === 0) {
-                      alert("Введите текст для озвучивания!");
-                      return;
-                  }
-
-                  const formData = new FormData();
-                  formData.append('text', textToSpeak);
-
-                  try {
-                      // Запрос к эндпоинту /tts
-                      const response = await fetch('/tts', {
-                          method: 'POST',
-                          body: formData,
-                      });
-
-                      if (!response.ok) {
-                          // Попробуйте прочитать ошибку как JSON, если это возможно
-                          const errorText = await response.text();
-                          let errorMessage = 'Ошибка озвучивания текста.';
-                          try {
-                              const errorJson = JSON.parse(errorText);
-                              errorMessage = errorJson.detail || errorMessage;
-                          } catch (e) {
-                             // Если это не JSON, используем общий текст ошибки
-                          }
-                          throw new Error(`Статус ${response.status}: ${errorMessage}`);
-                      }
-
-                      const audioBlob = await response.blob();
-                      const audioUrl = URL.createObjectURL(audioBlob);
-                      const audio = new Audio(audioUrl);
-
-                      audio.play();
-
-                      audio.onended = () => {
-                          URL.revokeObjectURL(audioUrl);
-                      };
-
-                  } catch (error) {
-                      console.error('TTS Error:', error);
-                      alert(`Ошибка: ${error.message}`);
-                  }
-              });
-          }
-
-          if (oldPlayAudioButton) {
-              oldPlayAudioButton.addEventListener('click', () => {
-                  console.log("Нажата кнопка 'Прослушать последнее записанное аудио'. Добавьте сюда ее логику.");
-                 
-              });
-          }
-      });
-      </script>
-
     {% else %}
       <div class="empty">Выберите чат слева или создайте новый.</div>
     {% endif %}
@@ -98,10 +29,8 @@
 <script>
   window.__CHAT_CONTEXT = {
     selected_chat: {{ selected_chat|tojson }},
-    // безопасно: если переменной нет — будет пустой список
     initial_messages: {{ initial_messages|default([])|tojson }}
   };
 </script>
 {% endif %}
-
 {% endblock %}
