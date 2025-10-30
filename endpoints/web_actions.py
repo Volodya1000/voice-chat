@@ -18,6 +18,7 @@ from services.chat_service import ChatService, Broadcaster
 from services.transcription_service import TranscriptionService
 from gtts import gTTS
 from .utils import get_current_user_id_from_request
+from services.local_tts_service import LocalTextToVoiceService
 
 router = APIRouter()
 
@@ -99,44 +100,35 @@ async def sse_chat_events(
 
 
 @router.post("/tts", response_class=StreamingResponse)
+@inject
 async def text_to_speech(
         request: Request,
-        text: str = Form(...),  # Получаем текст из формы
+        text: str = Form(...),
+        speaker: str = Form('aidar'),
+        tts_service: LocalTextToVoiceService = Depends(Provide[Container.local_tts_service])
 ):
     """
-    Конвертирует переданный текст в MP3-аудио, используя gTTS,
-    и возвращает его как стрим.
+    Локальный TTS с использованием Silero (вместо gTTS).
     """
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    if not text:
+    if not text.strip():
         raise HTTPException(status_code=400, detail="Text content is required.")
 
-    # 1. Создаем объект gTTS
     try:
-        # Устанавливаем русский язык ('ru')
-        tts = gTTS(text=text, lang='ru')
+        audio_bytes = tts_service.synthesize_to_bytes(text, speaker=speaker)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        print(f"gTTS initialization error: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка инициализации gTTS.")
+        print(f"TTS synthesis error: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при генерации речи.")
 
-    # 2. Используем io.BytesIO для сохранения MP3 в памяти
-    audio_fp = io.BytesIO()
-    try:
-        tts.write_to_fp(audio_fp)
-        audio_fp.seek(0)  # Переводим указатель в начало потока
-    except Exception as e:
-        print(f"gTTS write error: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка генерации аудио.")
-
-    # 3. Возвращаем стрим MP3
     return StreamingResponse(
-        audio_fp,
-        media_type="audio/mp3",
+        io.BytesIO(audio_bytes),
+        media_type="audio/wav",
         headers={
-            # Дополнительный заголовок для корректного имени файла (по желанию)
-            "Content-Disposition": "inline; filename=tts_audio.mp3"
+            "Content-Disposition": "inline; filename=tts_audio.wav"
         }
     )

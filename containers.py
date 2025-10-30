@@ -6,6 +6,7 @@ from repositories.message_repo import MessageRepository
 from services.chat_service import ChatService, Broadcaster
 from db import get_session
 from services.transcription_service import TranscriptionService
+from services.local_tts_service import LocalTextToVoiceService
 
 
 class Container(containers.DeclarativeContainer):
@@ -14,7 +15,15 @@ class Container(containers.DeclarativeContainer):
     """
     # Указываем модули, в которые будет производиться инъекция.
     # Это позволяет использовать @inject в api.py и web.py
-    wiring_config = containers.WiringConfiguration(modules=["api", "web"])
+    wiring_config = containers.WiringConfiguration(
+        modules=[
+            "endpoints.web_pages",
+            "endpoints.web_actions",
+            "endpoints.api_users",
+            "endpoints.api_messages",
+            "services.chat_service",
+        ]
+    )
 
     # --- Провайдеры ---
 
@@ -53,6 +62,9 @@ class Container(containers.DeclarativeContainer):
     transcription_service: providers.Singleton[TranscriptionService] = providers.Singleton(
         TranscriptionService
     )
+
+    local_tts_service = providers.Singleton(LocalTextToVoiceService)
+
 
 # Создаем единственный экземпляр контейнера для всего приложения
 container = Container()

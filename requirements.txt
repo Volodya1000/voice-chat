@@ -13,3 +13,11 @@ dependency-injector
 
 pydub
 faster-whisper
+
+soundfile
+
+torch
+
+torchvision
+
+torchaudio
