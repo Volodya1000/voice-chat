@@ -7,16 +7,64 @@
   <main class="chat-area">
     {% if selected_chat %}
       {% include 'partials/messages.html' %}
+
       <form id="send-form" class="send-form">
-        <input name="content" id="message-input" placeholder="Введите сообщение..." required/>
+        <input name="content" id="message-input" placeholder="Введите сообщение..." required />
         <button type="button" id="voice-record-button" title="Голосовой ввод (Серверная транскрипция)">
           <span id="voice-icon">🎤</span>
         </button>
         <button type="submit">Отправить</button>
-
-        <button id="play-audio-button" type="button">▶️ Прослушать последнее записанное аудио</button>
-        <button id="tts-button" type="button">▶️ Озвучить текст</button>
       </form>
+
+      <!-- Кнопка для открытия/закрытия панели -->
+      <button id="toggle-tts-panel" class="toggle-btn">🎧 Настройки озвучки</button>
+
+      <!-- Сворачиваемая панель -->
+      <section id="tts-settings" class="tts-settings hidden">
+        <h3>🎧 Настройки озвучки</h3>
+
+        <!-- Выбор диктора -->
+        <label for="voice-select">Голос:</label>
+        <select id="voice-select" name="speaker">
+          {% set default_speakers = ['aidar', 'baya', 'kseniya', 'xenia', 'eugene', 'random'] %}
+          {% for speaker in available_speakers or default_speakers %}
+            <option value="{{ speaker }}">{{ speaker }}</option>
+          {% endfor %}
+        </select>
+
+        <!-- Скорость -->
+        <div class="slider-group">
+          <!-- Изменил span id на соответствующий input id + '-value' -->
+          <label for="speed-range">Скорость: <span id="speed-range-value">1.0</span>x</label>
+          <input type="range" id="speed-range" name="speed" min="0.2" max="3.0" value="1.0" step="0.1">
+        </div>
+
+        <!-- Высота тона -->
+        <div class="slider-group">
+          <label for="pitch-range">Высота тона (полутона): <span id="pitch-range-value">0</span></label>
+          <input type="range" id="pitch-range" name="pitch" min="-12" max="12" value="0" step="1">
+        </div>
+
+        <!-- Громкость -->
+        <div class="slider-group">
+          <label for="gain-range">Громкость (дБ): <span id="gain-range-value">0</span></label>
+          <input type="range" id="gain-range" name="gain_db" min="-30" max="10" value="0" step="1">
+        </div>
+
+        <!-- Реверберация -->
+        <div class="slider-group">
+          <label for="reverb-time">Реверберация (сек): <span id="reverb-time-value">0.0</span></label>
+          <input type="range" id="reverb-time" name="reverb_time" min="0" max="5" step="0.1" value="0">
+
+          <label for="reverb-decay">Затухание (0..1): <span id="reverb-decay-value">0.00</span></label>
+          <input type="range" id="reverb-decay" name="reverb_decay" min="0" max="1" step="0.05" value="0">
+        </div>
+
+        <!-- Убраны паузы silence_before/silence_after по запросу -->
+
+        <button id="tts-button" type="button">▶️ Озвучить текст</button>
+        <button id="play-audio-button" type="button">🔊 Прослушать последнее аудио</button>
+      </section>
     {% else %}
       <div class="empty">Выберите чат слева или создайте новый.</div>
     {% endif %}
@@ -25,12 +73,165 @@
 
 {% include 'partials/loading_indicator.html' %}
 
-{% if selected_chat %}
 <script>
-  window.__CHAT_CONTEXT = {
-    selected_chat: {{ selected_chat|tojson }},
-    initial_messages: {{ initial_messages|default([])|tojson }}
-  };
+  // Тоггл панели
+  const ttsPanel = document.getElementById('tts-settings');
+  const toggleBtn = document.getElementById('toggle-tts-panel');
+  toggleBtn.addEventListener('click', () => {
+    ttsPanel.classList.toggle('hidden');
+    toggleBtn.textContent = ttsPanel.classList.contains('hidden')
+      ? "🎧 Показать настройки озвучки"
+      : "🔽 Скрыть настройки озвучки";
+  });
+
+  // Форматирование значений для показа
+  function formatLabelFor(slider, value) {
+    if (!value && value !== 0) value = slider.value;
+    switch (slider.id) {
+      case 'speed-range':
+        return parseFloat(value).toFixed(1);
+      case 'pitch-range':
+        return parseInt(value, 10).toString();
+      case 'gain-range': {
+        const v = parseInt(value, 10);
+        return (v > 0 ? '+' + v : v.toString());
+      }
+      case 'reverb-time':
+        return parseFloat(value).toFixed(1);
+      case 'reverb-decay':
+        return parseFloat(value).toFixed(2);
+      default:
+        return value;
+    }
+  }
+
+  // Обновление чисел при движении ползунков (robust)
+  document.querySelectorAll('input[type="range"]').forEach(slider => {
+    // Попробуем найти ярлык по нескольким паттернам
+    let label = document.getElementById(slider.id + '-value');
+    if (!label) {
+      // иногда input id может быть с суффиксом -range, попробуем убрать
+      const alt = slider.id.replace(/-range$/, '');
+      label = document.getElementById(alt + '-value') || document.getElementById(slider.id.replace(/-time$/, '') + '-value');
+    }
+    // Присвоим начальное значение, если нашли label
+    if (label) {
+      label.textContent = formatLabelFor(slider, slider.value);
+      slider.addEventListener('input', () => {
+        label.textContent = formatLabelFor(slider, slider.value);
+      });
+    } else {
+      // Fallback: если label не найден, просто логируем (не ломает работу)
+      slider.addEventListener('input', () => {
+        // ничего
+      });
+    }
+  });
+
+  // Обработка TTS
+  let lastAudioUrl = null;
+  document.getElementById('tts-button').addEventListener('click', async () => {
+    const text = document.getElementById('message-input').value.trim();
+    if (!text) return alert("Введите текст для озвучки.");
+
+    const payload = {
+      text,
+      speaker: document.getElementById('voice-select').value,
+      speed: parseFloat(document.getElementById('speed-range').value),
+      pitch_semitones: parseInt(document.getElementById('pitch-range').value, 10),
+      gain_db: parseFloat(document.getElementById('gain-range').value),
+      reverb_time: parseFloat(document.getElementById('reverb-time').value),
+      reverb_decay: parseFloat(document.getElementById('reverb-decay').value)
+      // Параметры пауз удалены (убраны паузы до/после)
+    };
+
+    try {
+      const resp = await fetch("/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        alert("Ошибка TTS: " + resp.statusText);
+        return;
+      }
+
+      const blob = await resp.blob();
+      if (lastAudioUrl) {
+        // очистим предыдущий объект
+        URL.revokeObjectURL(lastAudioUrl);
+        lastAudioUrl = null;
+      }
+      const url = URL.createObjectURL(blob);
+      lastAudioUrl = url;
+
+      const audio = new Audio(url);
+      audio.play();
+      audio.addEventListener('ended', () => {
+        // можно отзывать url сразу после окончания
+        // но сохраняем lastAudioUrl чтобы кнопка "Прослушать" работала,
+        // и отзовём предыдущий url при следующем запросе
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Ошибка при отправке запроса TTS.");
+    }
+  });
+
+  // Кнопка прослушать последнее аудио
+  document.getElementById('play-audio-button').addEventListener('click', () => {
+    if (!lastAudioUrl) return alert("Нет сохранённого аудио. Сначала нажмите «Озвучить текст».");
+    const audio = new Audio(lastAudioUrl);
+    audio.play();
+  });
 </script>
-{% endif %}
+
+<style>
+  .toggle-btn {
+    margin-top: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: #222;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .toggle-btn:hover {
+    background: #333;
+  }
+
+  .tts-settings {
+    margin-top: 0.5rem;
+    padding: 1rem;
+    border: 1px solid #444;
+    border-radius: 10px;
+    background: #1a1a1a;
+    color: #f5f5f5;
+  }
+
+  .tts-settings.hidden {
+    display: none;
+  }
+
+  .slider-group {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 1rem;
+  }
+
+  label {
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+  }
+
+  input[type="range"] {
+    width: 100%;
+  }
+
+  #tts-button, #play-audio-button {
+    margin-top: 0.5rem;
+    margin-right: 0.5rem;
+  }
+</style>
 {% endblock %}

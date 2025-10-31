@@ -1,12 +1,24 @@
 import io
 import torch
 import soundfile as sf
-from typing import List
+import numpy as np
+from typing import List, Optional, Tuple
+
+import librosa  # для pitch/time-stretch
+
+def _select_device() -> torch.device:
+    if torch.cuda.is_available():
+        print("🚀 Используется CUDA (GPU).")
+        return torch.device('cuda')
+    else:
+        print("🖥️ Используется CPU.")
+        return torch.device('cpu')
 
 
 class LocalTextToVoiceService:
     """
     Локальный сервис TTS (Text-to-Speech) на базе Silero.
+    Поддерживает speed, pitch, gain, reverb и паузы.
     """
 
     DEFAULT_LANGUAGE = 'ru'
@@ -20,18 +32,10 @@ class LocalTextToVoiceService:
         self.language = language
         self.model_id = model_id
         self.sample_rate = sample_rate
-        self.device = self._select_device()
+        self.device = _select_device()
         self.model = None
         self.speakers: List[str] = []
         self._load_model()
-
-    def _select_device(self) -> torch.device:
-        if torch.cuda.is_available():
-            print("🚀 Используется CUDA (GPU).")
-            return torch.device('cuda')
-        else:
-            print("🖥️ Используется CPU.")
-            return torch.device('cpu')
 
     def _load_model(self):
         print(f"Загрузка модели Silero ({self.model_id})...")
@@ -43,15 +47,27 @@ class LocalTextToVoiceService:
                 speaker=self.model_id
             )
             self.model.to(self.device)
-            self.speakers = self.model.speakers
+            self.speakers = getattr(self.model, "speakers", [self.model_id])
             print(f"✅ Модель загружена. Доступные дикторы: {self.speakers}")
         except Exception as e:
             print(f"❌ Ошибка загрузки модели: {e}")
             self.model = None
 
-    def synthesize_to_bytes(self, text: str, speaker: str = 'aidar') -> bytes:
+    def synthesize_to_bytes(
+        self,
+        text: str,
+        speaker: str = 'aidar',
+        speed: float = 1.0,
+        pitch_semitones: float = 0.0,
+        gain_db: float = 0.0,
+        reverb_time: float = 0.0,
+        reverb_decay: float = 0.0,
+        silence_before: float = 0.0,
+        silence_after: float = 0.0
+    ) -> bytes:
         """
-        Синтезирует речь в память и возвращает в виде байтов .wav.
+        Синтез речи и пост-обработка с применением всех параметров.
+        Возвращает WAV в виде байтов.
         """
         if not self.model:
             raise RuntimeError("TTS модель не загружена")
@@ -59,15 +75,70 @@ class LocalTextToVoiceService:
         if speaker not in self.speakers:
             raise ValueError(f"Голос '{speaker}' не найден. Доступные: {self.speakers}")
 
-        # Генерация аудио
-        audio = self.model.apply_tts(
+        # Генерация исходного аудио (numpy float32)
+        wav_tensor = self.model.apply_tts(
             text=text,
             speaker=speaker,
             sample_rate=self.sample_rate
         )
+        wav = wav_tensor.detach().cpu().numpy().astype(np.float32)
 
-        # Конвертация в wav (байты)
+        # -----------------------
+        # Пост-обработка
+        # -----------------------
+        wav = self._add_silence(wav, silence_before, silence_after)
+        wav = self._pitch_shift(wav, pitch_semitones)
+        wav = self._time_stretch(wav, speed)
+        wav = self._change_volume(wav, gain_db)
+        wav = self._add_reverb(wav, reverb_time, reverb_decay)
+        wav = self._normalize(wav)
+
+        # Конвертация в WAV байты
         buffer = io.BytesIO()
-        sf.write(buffer, audio.cpu().numpy(), self.sample_rate, format='WAV')
+        sf.write(buffer, wav, self.sample_rate, format='WAV')
         buffer.seek(0)
         return buffer.read()
+
+    # -----------------------
+    # Пост-обработка
+    # -----------------------
+    def _normalize(self, wav: np.ndarray, target_peak: float = 0.98) -> np.ndarray:
+        peak = np.max(np.abs(wav))
+        if peak > 0:
+            wav = wav * (target_peak / peak)
+        return wav.astype(np.float32)
+
+    def _change_volume(self, wav: np.ndarray, db: float) -> np.ndarray:
+        factor = 10 ** (db / 20)
+        return (wav * factor).astype(np.float32)
+
+    def _time_stretch(self, wav: np.ndarray, speed: float) -> np.ndarray:
+        if abs(speed - 1.0) < 1e-6:
+            return wav
+        return librosa.effects.time_stretch(wav, rate=speed).astype(np.float32)
+
+    def _pitch_shift(self, wav: np.ndarray, n_steps: float) -> np.ndarray:
+        if abs(n_steps) < 1e-6:
+            return wav
+        return librosa.effects.pitch_shift(wav, sr=self.sample_rate, n_steps=n_steps).astype(np.float32)
+
+    def _add_silence(self, wav: np.ndarray, before: float, after: float) -> np.ndarray:
+        b = int(round(before * self.sample_rate))
+        a = int(round(after * self.sample_rate))
+        if b == 0 and a == 0:
+            return wav
+        silence_before = np.zeros(b, dtype=np.float32)
+        silence_after = np.zeros(a, dtype=np.float32)
+        return np.concatenate([silence_before, wav, silence_after]).astype(np.float32)
+
+    def _add_reverb(self, wav: np.ndarray, reverb_time: float, decay: float) -> np.ndarray:
+        if reverb_time <= 0 or decay <= 0:
+            return wav
+        n = int(self.sample_rate * reverb_time)
+        t = np.arange(n, dtype=np.float32)
+        ir = (decay ** (t / (self.sample_rate * reverb_time))).astype(np.float32)
+        ir /= (np.sum(np.abs(ir)) + 1e-9)
+        convolved = np.convolve(wav, ir, mode='full')[:len(wav)]
+        out = wav + convolved * 0.7
+        out /= max(1.0, np.max(np.abs(out)) + 1e-9)
+        return out.astype(np.float32)

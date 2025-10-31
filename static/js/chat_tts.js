@@ -1,48 +1,54 @@
-// chat_tts.js
-
 export function setupTTS(ttsButton, messageInput) {
   if (!ttsButton || !messageInput) return;
 
   ttsButton.addEventListener("click", async () => {
-    const textToSpeak = messageInput.value.trim();
+    const text = messageInput.value.trim();
+    if (!text) return alert("Введите текст для озвучки.");
 
-    if (textToSpeak.length === 0) {
-      alert("Введите текст для озвучивания!");
-      return;
-    }
+    const payload = {
+      text,
+      speaker: document.getElementById("voice-select")?.value || "aidar",
+      speed: parseFloat(document.getElementById("speed-range")?.value) || 1.0,
+      pitch_semitones: parseFloat(document.getElementById("pitch-range")?.value) || 0,
+      gain_db: parseFloat(document.getElementById("gain-range")?.value) || 0,
+      reverb_time: parseFloat(document.getElementById("reverb-time")?.value) || 0,
+      reverb_decay: parseFloat(document.getElementById("reverb-decay")?.value) || 0
+    };
 
-    const formData = new FormData();
-    formData.append("text", textToSpeak);
+    // Проверка NaN
+    Object.keys(payload).forEach(key => {
+      if (typeof payload[key] === "number" && isNaN(payload[key])) {
+        payload[key] = 0;
+      }
+    });
 
     try {
-      const response = await fetch("/tts", {
+      const resp = await fetch("/tts", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = "Ошибка озвучивания текста.";
+      if (!resp.ok) {
+        const errText = await resp.text();
+        let msg = `Ошибка ${resp.status}: ${resp.statusText}`;
         try {
-          const errorJson = JSON.parse(errorText);
-          errorMessage = errorJson.detail || errorMessage;
-        } catch (_) {
-          /* ignore */
-        }
-        throw new Error(`Статус ${response.status}: ${errorMessage}`);
+          const json = JSON.parse(errText);
+          msg = json.detail || msg;
+        } catch (_) {}
+        throw new Error(msg);
       }
 
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
+      const blob = await resp.blob();
+      const audioUrl = URL.createObjectURL(blob);
       const audio = new Audio(audioUrl);
       audio.play();
+      audio.onended = () => URL.revokeObjectURL(audioUrl);
 
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-      };
-    } catch (error) {
-      console.error("TTS Error:", error);
-      alert(`Ошибка: ${error.message}`);
+    } catch (err) {
+      console.error("TTS Error:", err);
+      alert("Ошибка TTS: " + err.message);
     }
   });
 }
+

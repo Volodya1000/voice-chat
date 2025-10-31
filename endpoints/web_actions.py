@@ -7,6 +7,7 @@ from fastapi.responses import (
     Response, JSONResponse,
     StreamingResponse
 )
+from pydantic import BaseModel, confloat, validator
 # Это зависимость из `pip install sse-starlette`
 from sse_starlette.sse import EventSourceResponse
 import asyncio
@@ -98,27 +99,66 @@ async def sse_chat_events(
 
     return EventSourceResponse(event_generator())
 
+class TTSRequest(BaseModel):
+    text: str
+    speaker: str = "aidar"
+    speed: float = 1.0
+    pitch_semitones: float = 0
+    gain_db: float = 0
+    reverb_time: float = 0
+    reverb_decay: float = 0
+from fastapi import APIRouter, Request, Depends, HTTPException, Body
+from fastapi.responses import StreamingResponse
+from dependency_injector.wiring import inject, Provide
+from pydantic import BaseModel
+import io
+
+# --- Pydantic модель запроса ---
+class TTSRequest(BaseModel):
+    text: str
+    speaker: str = "aidar"
+    speed: confloat(ge=0.2, le=3.0) = 1.0
+    pitch_semitones: confloat(ge=-12, le=12) = 0
+    gain_db: confloat(ge=-30, le=10) = 0
+    reverb_time: confloat(ge=0, le=5) = 0
+    reverb_decay: confloat(ge=0, le=1) = 0
+
+    @validator("text")
+    def text_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Text must not be empty")
+        return v
+
+router = APIRouter()
 
 @router.post("/tts", response_class=StreamingResponse)
 @inject
 async def text_to_speech(
-        request: Request,
-        text: str = Form(...),
-        speaker: str = Form('aidar'),
-        tts_service: LocalTextToVoiceService = Depends(Provide[Container.local_tts_service])
+    request: Request,
+    tts_req: TTSRequest = Body(...),  # теперь принимаем JSON
+    tts_service: "LocalTextToVoiceService" = Depends(Provide[Container.local_tts_service])
 ):
     """
     Локальный TTS с использованием Silero (вместо gTTS).
     """
+
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    if not text.strip():
+    if not tts_req.text.strip():
         raise HTTPException(status_code=400, detail="Text content is required.")
 
     try:
-        audio_bytes = tts_service.synthesize_to_bytes(text, speaker=speaker)
+        audio_bytes = tts_service.synthesize_to_bytes(
+            text=tts_req.text,
+            speaker=tts_req.speaker,
+            speed=tts_req.speed,
+            pitch_semitones=tts_req.pitch_semitones,
+            gain_db=tts_req.gain_db,
+            reverb_time=tts_req.reverb_time,
+            reverb_decay=tts_req.reverb_decay,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -128,7 +168,5 @@ async def text_to_speech(
     return StreamingResponse(
         io.BytesIO(audio_bytes),
         media_type="audio/wav",
-        headers={
-            "Content-Disposition": "inline; filename=tts_audio.wav"
-        }
+        headers={"Content-Disposition": "inline; filename=tts_audio.wav"}
     )
