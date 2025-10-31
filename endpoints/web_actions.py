@@ -1,7 +1,7 @@
 # endpoints/web_actions.py
 from fastapi import (
     APIRouter, Request, Depends, Form,
-    HTTPException,BackgroundTasks, UploadFile, File
+    HTTPException, BackgroundTasks, UploadFile, File, Body
 )
 from fastapi.responses import (
     Response, JSONResponse,
@@ -107,29 +107,6 @@ class TTSRequest(BaseModel):
     gain_db: float = 0
     reverb_time: float = 0
     reverb_decay: float = 0
-from fastapi import APIRouter, Request, Depends, HTTPException, Body
-from fastapi.responses import StreamingResponse
-from dependency_injector.wiring import inject, Provide
-from pydantic import BaseModel
-import io
-
-# --- Pydantic модель запроса ---
-class TTSRequest(BaseModel):
-    text: str
-    speaker: str = "aidar"
-    speed: confloat(ge=0.2, le=3.0) = 1.0
-    pitch_semitones: confloat(ge=-12, le=12) = 0
-    gain_db: confloat(ge=-30, le=10) = 0
-    reverb_time: confloat(ge=0, le=5) = 0
-    reverb_decay: confloat(ge=0, le=1) = 0
-
-    @validator("text")
-    def text_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("Text must not be empty")
-        return v
-
-router = APIRouter()
 
 @router.post("/tts", response_class=StreamingResponse)
 @inject
