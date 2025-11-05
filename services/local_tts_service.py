@@ -84,9 +84,9 @@ class LocalTextToVoiceService:
         wav = self._add_silence(wav, silence_before, silence_after)
         wav = self._pitch_shift(wav, pitch_semitones)
         wav = self._time_stretch(wav, speed)
-        wav = self._change_volume(wav, gain_db)
         wav = self._add_reverb(wav, reverb_time, reverb_decay)
         wav = self._normalize(wav)
+        wav = self._change_volume(wav, gain_db)
 
         # Конвертация в WAV байты
         buffer = io.BytesIO()
@@ -133,17 +133,28 @@ class LocalTextToVoiceService:
         silence_after = np.zeros(a, dtype=np.float32)
         return np.concatenate([silence_before, wav, silence_after]).astype(np.float32)
 
+
     def _add_reverb(self, wav: np.ndarray, reverb_time: float, decay: float) -> np.ndarray:
-        if reverb_time <= 0 or decay <= 0:
+        # Проверяем корректность параметров
+        if reverb_time <= 0 or decay <= 0 or decay >= 1:
             return wav
+
+        # Создание импульсного отклика
         n = int(self.sample_rate * reverb_time)
         t = np.arange(n, dtype=np.float32)
-        ir = decay ** (t / n)  # экспонента от 1 до decay
+        ir = decay ** (t / n)
+
+        # Применение реверберации через свертку
         convolved = np.convolve(wav, ir, mode='full')[:len(wav)]
-        out = wav + convolved * 0.5  # регулируем вес реверберации
-        # нормализация только если пик выше 1
+
+        # Добавление "мокрого" сигнала с уменьшенной громкостью
+        out = wav + convolved * 0.15  # Значение 0.1–0.25 можно регулировать
+
+        # Нормализация только если пик превышает 1
         peak = np.max(np.abs(out))
         if peak > 1.0:
             out /= peak
+
         return out.astype(np.float32)
+
 
