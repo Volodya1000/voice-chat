@@ -16,11 +16,6 @@ def _select_device() -> torch.device:
 
 
 class LocalTextToVoiceService:
-    """
-    Локальный сервис TTS (Text-to-Speech) на базе Silero.
-    Поддерживает speed, pitch, gain, reverb и паузы.
-    """
-
     DEFAULT_LANGUAGE = 'ru'
     DEFAULT_MODEL_ID = 'v4_ru'
     DEFAULT_SAMPLE_RATE = 48000
@@ -109,8 +104,15 @@ class LocalTextToVoiceService:
         return wav.astype(np.float32)
 
     def _change_volume(self, wav: np.ndarray, db: float) -> np.ndarray:
+        if abs(db) < 1e-3:  # если db ≈ 0, ничего не делаем
+            return wav
         factor = 10 ** (db / 20)
-        return (wav * factor).astype(np.float32)
+        wav = wav * factor
+        # Ограничиваем амплитуду, чтобы не было клиппинга
+        max_val = np.max(np.abs(wav))
+        if max_val > 1.0:
+            wav = wav / max_val
+        return wav.astype(np.float32)
 
     def _time_stretch(self, wav: np.ndarray, speed: float) -> np.ndarray:
         if abs(speed - 1.0) < 1e-6:
@@ -136,9 +138,12 @@ class LocalTextToVoiceService:
             return wav
         n = int(self.sample_rate * reverb_time)
         t = np.arange(n, dtype=np.float32)
-        ir = (decay ** (t / (self.sample_rate * reverb_time))).astype(np.float32)
-        ir /= (np.sum(np.abs(ir)) + 1e-9)
+        ir = decay ** (t / n)  # экспонента от 1 до decay
         convolved = np.convolve(wav, ir, mode='full')[:len(wav)]
-        out = wav + convolved * 0.7
-        out /= max(1.0, np.max(np.abs(out)) + 1e-9)
+        out = wav + convolved * 0.5  # регулируем вес реверберации
+        # нормализация только если пик выше 1
+        peak = np.max(np.abs(out))
+        if peak > 1.0:
+            out /= peak
         return out.astype(np.float32)
+
