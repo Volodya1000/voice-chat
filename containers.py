@@ -3,7 +3,8 @@ from dependency_injector import containers, providers
 from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
-from services.chat_service import ChatService, Broadcaster
+from services.chat_service import ChatService
+from services.broadcaster_service import Broadcaster
 from db import get_session
 from services.transcription_service import TranscriptionService
 from services.local_tts_service import LocalTextToVoiceService
@@ -53,17 +54,20 @@ class Container(containers.DeclarativeContainer):
 
     broadcaster = providers.Singleton(Broadcaster)
 
+    local_tts_service = providers.Singleton(LocalTextToVoiceService)
+
     chat_service: providers.Factory[ChatService] = providers.Factory(
         ChatService,
         message_repo=message_repo,
-        broadcaster=broadcaster
+        broadcaster=broadcaster,
+        tts_service=local_tts_service
     )
 
     transcription_service: providers.Singleton[TranscriptionService] = providers.Singleton(
         TranscriptionService
     )
 
-    local_tts_service = providers.Singleton(LocalTextToVoiceService)
+
 
 
 # Создаем единственный экземпляр контейнера для всего приложения

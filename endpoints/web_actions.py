@@ -1,4 +1,7 @@
 # endpoints/web_actions.py
+import os
+from fastapi.responses import FileResponse
+
 from fastapi import (
     APIRouter, Request, Depends, Form,
     HTTPException, BackgroundTasks, UploadFile, File, Body
@@ -15,7 +18,8 @@ import io
 from dependency_injector.wiring import inject, Provide
 from containers import Container
 # Импортируем Broadcaster для внедрения в SSE-эндпоинт
-from services.chat_service import ChatService, Broadcaster
+from services.chat_service import ChatService
+from services.broadcaster_service import Broadcaster
 from services.transcription_service import TranscriptionService
 from gtts import gTTS
 from .utils import get_current_user_id_from_request
@@ -31,17 +35,36 @@ async def send_message(
         chat_id: int,
         background_tasks: BackgroundTasks,
         content: str = Form(...),
+        voice_enabled: bool = Form(True),
+        speaker: str = Form("aidar"),
+        speed: float = Form(1.0),
+        pitch_semitones: int = Form(0),
+        gain_db: float = Form(0.0),
+        reverb_time: float = Form(0.0),
+        reverb_decay: float = Form(0.0),
         chat_service: ChatService = Depends(Provide[Container.chat_service])
 ):
     user_id = get_current_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    tts_options = {
+        "voice_enabled": bool(voice_enabled),
+        "speaker": speaker,
+        "speed": float(speed),
+        "pitch_semitones": int(pitch_semitones),
+        "gain_db": float(gain_db),
+        "reverb_time": float(reverb_time),
+        "reverb_decay": float(reverb_decay),
+    }
+
+    # Запускаем обработку в background (как ранее)
     background_tasks.add_task(
         chat_service.process_user_message,
         chat_id=chat_id,
         content=content,
-        user_id=user_id
+        user_id=user_id,
+        tts_options=tts_options
     )
 
     return Response(status_code=204)
@@ -147,3 +170,22 @@ async def text_to_speech(
         media_type="audio/wav",
         headers={"Content-Disposition": "inline; filename=tts_audio.wav"}
     )
+
+@router.get("/chats/{chat_id}/messages/{msg_id}/audio")
+@inject
+async def get_message_audio(
+    request: Request,
+    chat_id: int,
+    msg_id: int,
+):
+    user_id = get_current_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    tts_cache_dir = os.getenv("TTS_CACHE_DIR", "/tmp/tts_cache")
+    audio_path = os.path.join(tts_cache_dir, f"tts_{msg_id}.wav")
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="Audio not found")
+
+    # Можно добавить проверки доступа: принадлежит ли сообщение этому чату, и т.д.
+    return FileResponse(audio_path, media_type="audio/wav", filename=f"tts_{msg_id}.wav")

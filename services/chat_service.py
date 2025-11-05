@@ -1,67 +1,30 @@
 # services/chat_service.py
+import os
+
 from models import MessageType
 from langchain_ollama.llms import OllamaLLM
-import asyncio
 from dtos import MessageDTO
-import json
-from collections import defaultdict
 from repositories.message_repo import MessageRepository
-
-
-class Broadcaster:
-    """
-    Управляет подписчиками SSE и рассылает сообщения (полные или токены).
-    """
-
-    def __init__(self):
-        # Очереди теперь хранят словари (полные SSE-события)
-        self._listeners: dict[int, set[asyncio.Queue[dict]]] = defaultdict(set)
-
-    async def subscribe(self, chat_id: int) -> asyncio.Queue[dict]:
-        """Подписывает клиента на обновления чата и возвращает очередь."""
-        queue = asyncio.Queue()
-        self._listeners[chat_id].add(queue)
-        return queue
-
-    def unsubscribe(self, chat_id: int, queue: asyncio.Queue[dict]):
-        """Отписывает клиента от обновлений."""
-        try:
-            self._listeners[chat_id].remove(queue)
-            if not self._listeners[chat_id]:
-                del self._listeners[chat_id]
-        except (KeyError, ValueError):
-            pass  # Игнорируем, если уже отписан
-
-    async def publish_message(self, chat_id: int, message_json: str):
-        """Публикует полное новое сообщение."""
-        event_data = {
-            "event": "new_message",
-            "data": message_json
-        }
-        for queue in self._listeners.get(chat_id, set()):
-            await queue.put(event_data)
-
-    async def publish_token(self, chat_id: int, msg_id: int, token: str):
-        """Публикует один токен для существующего сообщения."""
-        token_data = {"msg_id": msg_id, "token": token}
-        event_data = {
-            "event": "stream_token",
-            "data": json.dumps(token_data)
-        }
-        for queue in self._listeners.get(chat_id, set()):
-            await queue.put(event_data)
+from services.broadcaster_service import Broadcaster
+from services.local_tts_service import LocalTextToVoiceService
 
 
 class ChatService:
-    def __init__(self, message_repo: MessageRepository, broadcaster: Broadcaster):
+    def __init__(
+        self,
+        message_repo: MessageRepository,
+        broadcaster: Broadcaster,
+        tts_service: LocalTextToVoiceService | None = None,  # <-- добавляем
+    ):
         self.message_repo = message_repo
         self.broadcaster = broadcaster
-        # Используйте вашу фактическую модель Ollama
+        self.tts_service = tts_service  # <-- сохраняем сервис TTS
         self.llm = OllamaLLM(model="saiga_llama3_8b:latest")
 
         # Обратите внимание: аргумент user_id остался для получения ID текущего пользователя
 
-    async def process_user_message(self, chat_id: int, content: str, user_id: int) -> None:
+    async def process_user_message(self, chat_id: int, content: str, user_id: int,
+                                   tts_options: dict | None = None) -> None:
         """
         Обрабатывает сообщение пользователя, запускает стриминг ответа модели.
         """
@@ -129,3 +92,35 @@ class ChatService:
             )
         except Exception as e:
             print(f"Error updating model message content: {e}")
+
+        try:
+            if tts_options and tts_options.get("voice_enabled") and self.tts_service:
+                print(f"[DEBUG] Generating TTS audio for msg_id={model_msg.id}")
+
+                # Генерируем аудио (synthesize_to_bytes возвращает bytes WAV)
+                audio_bytes = self.tts_service.synthesize_to_bytes(
+                    text=final_content,
+                    speaker=tts_options.get("speaker", "aidar"),
+                    speed=tts_options.get("speed", 1.0),
+                    pitch_semitones=tts_options.get("pitch_semitones", 0),
+                    gain_db=tts_options.get("gain_db", 0.0),
+                    reverb_time=tts_options.get("reverb_time", 0.0),
+                    reverb_decay=tts_options.get("reverb_decay", 0.0),
+                )
+
+                # Сохраняем на диск в директорию кеша
+                tts_cache_dir = os.getenv("TTS_CACHE_DIR", "/tmp/tts_cache")
+                os.makedirs(tts_cache_dir, exist_ok=True)
+                audio_path = os.path.join(tts_cache_dir, f"tts_{model_msg.id}.wav")
+                with open(audio_path, "wb") as f:
+                    f.write(audio_bytes)
+
+                # Публикуем событие для клиентов, чтобы они могли скачать/воспроизвести
+                audio_url = f"/chats/{chat_id}/messages/{model_msg.id}/audio"
+                await self.broadcaster.publish_audio(
+                    chat_id=chat_id,
+                    msg_id=model_msg.id,
+                    audio_url=audio_url
+                )
+        except Exception as e:
+            print(f"TTS generation error for msg {model_msg.id}: {e}")
