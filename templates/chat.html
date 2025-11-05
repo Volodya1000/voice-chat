@@ -73,6 +73,14 @@
 
 {% include 'partials/loading_indicator.html' %}
 
+{% if selected_chat %}
+<script>
+  window.__CHAT_CONTEXT = {
+    selected_chat: {{ selected_chat|tojson }},
+    initial_messages: {{ initial_messages|default([])|tojson }}
+  };
+</script>
+{% endif %}
 <script>
   // Тоггл панели
   const ttsPanel = document.getElementById('tts-settings');
