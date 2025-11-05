@@ -16,6 +16,11 @@
         <button type="submit">Отправить</button>
       </form>
 
+        <div class="tts-buttons">
+          <button id="tts-button" type="button">▶️ Озвучить текст</button>
+          <button id="play-audio-button" type="button">🔊 Прослушать последнее аудио</button>
+        </div>
+
       <!-- Кнопка для открытия/закрытия панели -->
       <button id="toggle-tts-panel" class="toggle-btn">🎧 Настройки озвучки</button>
 
@@ -59,11 +64,6 @@
           <label for="reverb-decay">Затухание (0..1): <span id="reverb-decay-value">0.00</span></label>
           <input type="range" id="reverb-decay" name="reverb_decay" min="0" max="1" step="0.05" value="0">
         </div>
-
-        <!-- Убраны паузы silence_before/silence_after по запросу -->
-
-        <button id="tts-button" type="button">▶️ Озвучить текст</button>
-        <button id="play-audio-button" type="button">🔊 Прослушать последнее аудио</button>
       </section>
     {% else %}
       <div class="empty">Выберите чат слева или создайте новый.</div>
@@ -241,5 +241,13 @@
     margin-top: 0.5rem;
     margin-right: 0.5rem;
   }
+
+  .tts-buttons {
+  margin-top: 0.5rem;
+}
+.tts-buttons button {
+  margin-right: 0.5rem;
+}
+
 </style>
 {% endblock %}
