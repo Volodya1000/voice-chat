@@ -31,9 +31,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Async Chat App with DTOs & Repositories", lifespan=lifespan)
 
-# Подключаем контейнер к модулям.
-# Это необходимо, чтобы декоратор @inject заработал.
-# --- ИЗМЕНЕНИЯ ---
 container.wire(modules=[
     web_pages_module,
     web_actions_module,
@@ -42,12 +39,10 @@ container.wire(modules=[
     chat_service_module
 ])
 
-# Включаем все наши разделенные роутеры
 app.include_router(web_pages_router)
 app.include_router(web_actions_router)
 app.include_router(api_users_router)
 app.include_router(api_messages_router)
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
