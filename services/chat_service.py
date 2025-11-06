@@ -1,126 +1,172 @@
-# services/chat_service.py
 import os
-
-from models import MessageType
-from langchain_ollama.llms import OllamaLLM
+from langchain_ollama import ChatOllama
+from langchain.messages  import AIMessage, HumanMessage, SystemMessage
 from dtos import MessageDTO
+from models import MessageType
 from repositories.message_repo import MessageRepository
 from services.broadcaster_service import Broadcaster
 from services.local_tts_service import LocalTextToVoiceService
 
 
 class ChatService:
+    """
+    Сервис чата на базе ChatOllama:
+      - сохраняет сообщения
+      - формирует историю в виде списка сообщений
+      - вызывает модель через LangChain ChatOllama
+      - стримит токены пользователю
+      - при необходимости генерирует TTS
+    """
+
     def __init__(
         self,
         message_repo: MessageRepository,
         broadcaster: Broadcaster,
-        tts_service: LocalTextToVoiceService | None = None,  # <-- добавляем
+        tts_service: LocalTextToVoiceService | None = None,
     ):
         self.message_repo = message_repo
         self.broadcaster = broadcaster
-        self.tts_service = tts_service  # <-- сохраняем сервис TTS
-        self.llm = OllamaLLM(model="saiga_llama3_8b:latest")
+        self.tts_service = tts_service
+        self.llm = ChatOllama(
+            model="saiga_llama3_8b:latest",
+            temperature=0.7,
+            num_ctx=4096,
+            streaming=True,
+        )
 
-        # Обратите внимание: аргумент user_id остался для получения ID текущего пользователя
-
-    async def process_user_message(self, chat_id: int, content: str, user_id: int,
-                                   tts_options: dict | None = None) -> None:
+    # -------------------------------------------------------------------------
+    # Основной метод
+    # -------------------------------------------------------------------------
+    async def process_user_message(
+        self,
+        chat_id: int,
+        content: str,
+        user_id: int,
+        tts_options: dict | None = None
+    ) -> None:
         """
-        Обрабатывает сообщение пользователя, запускает стриминг ответа модели.
+        Обрабатывает сообщение пользователя:
+          1. сохраняет и публикует сообщение пользователя
+          2. создаёт пустое сообщение от модели
+          3. формирует историю чата
+          4. стримит ответ от LLM
+          5. сохраняет результат и TTS (если включён)
         """
+        user_msg = await self._save_and_publish_user_message(chat_id, content, user_id)
+        if not user_msg:
+            return
 
-        # 1. Сохраняем и публикуем сообщение пользователя
+        model_msg = await self._create_placeholder_model_message(chat_id)
+        if not model_msg:
+            return
+
+        messages = await self._build_message_history(chat_id, content)
+
+        final_content = await self._stream_llm_response(chat_id, model_msg.id, messages)
+
+        if final_content:
+            await self.message_repo.update_message_content(model_msg.id, final_content)
+            await self._maybe_generate_tts(chat_id, model_msg.id, final_content, tts_options)
+
+    # -------------------------------------------------------------------------
+    # Частные методы
+    # -------------------------------------------------------------------------
+
+    async def _save_and_publish_user_message(self, chat_id: int, content: str, user_id: int):
+        """Сохраняет и публикует сообщение пользователя."""
         try:
-            # --- ИСПРАВЛЕНО: user_id теперь передается для сообщения пользователя ---
-            user_msg = await self.message_repo.add_message(
+            msg = await self.message_repo.add_message(
                 chat_id=chat_id,
                 content=content,
                 message_type=MessageType.USER,
-                user_id=user_id  # <-- АКТИВИРОВАНО: Передаем ID пользователя
+                user_id=user_id
             )
             await self.broadcaster.publish_message(
                 chat_id,
-                MessageDTO.model_validate(user_msg).model_dump_json()
+                MessageDTO.model_validate(msg).model_dump_json()
             )
+            return msg
         except Exception as e:
             print(f"Error saving user message: {e}")
-            return
+            return None
 
-        # 2. Создаем ПУСТОЕ сообщение-плейсхолдер от модели
+    async def _create_placeholder_model_message(self, chat_id: int):
+        """Создаёт пустое сообщение для будущего ответа модели."""
         try:
-            # --- ИСПРАВЛЕНО: Передаем user_id=None для сообщения модели ---
-            model_msg = await self.message_repo.add_message(
+            msg = await self.message_repo.add_message(
                 chat_id=chat_id,
                 content="",
                 message_type=MessageType.MODEL,
-                user_id=None  # <-- АКТИВИРОВАНО: Сообщение модели не принадлежит пользователю
+                user_id=None
             )
-            # 3. Публикуем это пустое сообщение, чтобы JS создал div
             await self.broadcaster.publish_message(
                 chat_id,
-                MessageDTO.model_validate(model_msg).model_dump_json()
+                MessageDTO.model_validate(msg).model_dump_json()
             )
+            return msg
         except Exception as e:
             print(f"Error creating placeholder model message: {e}")
-            return
+            return None
 
-        # 4. Запускаем стриминг LLM и публикуем токены
-        full_content = []
+    async def _build_message_history(self, chat_id: int, new_message: str, limit: int = 50):
+        """Формирует историю сообщений для ChatOllama в виде списка ролей."""
         try:
-            # В production-коде здесь нужно передавать контекст (предыдущие сообщения)
-            async for token in self.llm.astream(content):
-                full_content.append(token)
-                await self.broadcaster.publish_token(
-                    chat_id,
-                    model_msg.id,
-                    token
-                )
+            messages = await self.message_repo.get_recent_messages_for_chat(chat_id, limit)
+            result = [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
+
+            for m in messages:
+                if not m.content:
+                    continue
+                if m.message_type == MessageType.USER:
+                    result.append(HumanMessage(content=m.content))
+                elif m.message_type == MessageType.MODEL:
+                    result.append(AIMessage(content=m.content))
+
+            result.append(HumanMessage(content=new_message))
+            return result
+        except Exception as e:
+            print(f"Error building chat history: {e}")
+            return [HumanMessage(content=new_message)]
+
+    async def _stream_llm_response(self, chat_id: int, model_msg_id: int, messages: list):
+        full_text = []
+        try:
+            async for chunk in self.llm.astream(messages):
+                await self.broadcaster.publish_token(chat_id, model_msg_id, chunk.content)
+                if chunk.content:
+                    full_text.append(chunk.content)
+
         except Exception as e:
             print(f"Error during LLM stream: {e}")
-            await self.broadcaster.publish_token(
-                chat_id,
-                model_msg.id,
-                "\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА]"
-            )
+            await self.broadcaster.publish_token(chat_id, model_msg_id, "\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА]")
 
-        # 5. Сохраняем полный ответ в БД
-        final_content = "".join(full_content)
-        try:
-            await self.message_repo.update_message_content(
-                model_msg.id,
-                final_content
-            )
-        except Exception as e:
-            print(f"Error updating model message content: {e}")
+        return "".join(full_text)
+
+
+    async def _maybe_generate_tts(self, chat_id: int, msg_id: int, text: str, tts_options: dict | None):
+        """Генерирует TTS, если включено."""
+        if not (tts_options and tts_options.get("voice_enabled") and self.tts_service):
+            return
 
         try:
-            if tts_options and tts_options.get("voice_enabled") and self.tts_service:
-                print(f"[DEBUG] Generating TTS audio for msg_id={model_msg.id}")
+            print(f"[DEBUG] Generating TTS audio for msg_id={msg_id}")
+            audio_bytes = self.tts_service.synthesize_to_bytes(
+                text=text,
+                speaker=tts_options.get("speaker", "aidar"),
+                speed=tts_options.get("speed", 1.0),
+                pitch_semitones=tts_options.get("pitch_semitones", 0),
+                gain_db=tts_options.get("gain_db", 0.0),
+                reverb_time=tts_options.get("reverb_time", 0.0),
+                reverb_decay=tts_options.get("reverb_decay", 0.0),
+            )
 
-                # Генерируем аудио (synthesize_to_bytes возвращает bytes WAV)
-                audio_bytes = self.tts_service.synthesize_to_bytes(
-                    text=final_content,
-                    speaker=tts_options.get("speaker", "aidar"),
-                    speed=tts_options.get("speed", 1.0),
-                    pitch_semitones=tts_options.get("pitch_semitones", 0),
-                    gain_db=tts_options.get("gain_db", 0.0),
-                    reverb_time=tts_options.get("reverb_time", 0.0),
-                    reverb_decay=tts_options.get("reverb_decay", 0.0),
-                )
+            tts_cache_dir = os.getenv("TTS_CACHE_DIR", "/tmp/tts_cache")
+            os.makedirs(tts_cache_dir, exist_ok=True)
+            audio_path = os.path.join(tts_cache_dir, f"tts_{msg_id}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
 
-                # Сохраняем на диск в директорию кеша
-                tts_cache_dir = os.getenv("TTS_CACHE_DIR", "/tmp/tts_cache")
-                os.makedirs(tts_cache_dir, exist_ok=True)
-                audio_path = os.path.join(tts_cache_dir, f"tts_{model_msg.id}.wav")
-                with open(audio_path, "wb") as f:
-                    f.write(audio_bytes)
-
-                # Публикуем событие для клиентов, чтобы они могли скачать/воспроизвести
-                audio_url = f"/chats/{chat_id}/messages/{model_msg.id}/audio"
-                await self.broadcaster.publish_audio(
-                    chat_id=chat_id,
-                    msg_id=model_msg.id,
-                    audio_url=audio_url
-                )
+            audio_url = f"/chats/{chat_id}/messages/{msg_id}/audio"
+            await self.broadcaster.publish_audio(chat_id, msg_id, audio_url)
         except Exception as e:
-            print(f"TTS generation error for msg {model_msg.id}: {e}")
+            print(f"TTS generation error for msg {msg_id}: {e}")
