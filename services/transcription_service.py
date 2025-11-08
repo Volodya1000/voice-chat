@@ -17,11 +17,6 @@ except Exception as e:
     print(f"❌ Ошибка загрузки Whisper: {e}")
 
 class TranscriptionService:
-    """
-    Сервис для транскрипции аудио с использованием faster-whisper без pydub.
-    Работает напрямую с UploadFile.
-    """
-
     def __init__(self, model: Optional[WhisperModel] = whisper_model):
         self.model = model
 
