@@ -1,42 +1,43 @@
+# file: services/chat_service.py
+# (Остальные импорты оставлены как есть)
+
 import os
-from langchain_ollama import ChatOllama
-from langchain.messages  import AIMessage, HumanMessage, SystemMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
 from dtos import MessageDTO
 from models import MessageType
 from repositories.message_repo import MessageRepository
 from services.broadcaster_service import Broadcaster
 from services.local_tts_service import LocalTextToVoiceService
 
+from services.agent_service import AgentService
+
 
 class ChatService:
     def __init__(
-        self,
-        message_repo: MessageRepository,
-        broadcaster: Broadcaster,
-        tts_service: LocalTextToVoiceService | None = None,
+            self,
+            message_repo: MessageRepository,
+            broadcaster: Broadcaster,
+            agent_service: AgentService,
+            tts_service: LocalTextToVoiceService | None = None,
     ):
         self.message_repo = message_repo
         self.broadcaster = broadcaster
+        self.agent_service = agent_service
         self.tts_service = tts_service
-        self.llm = ChatOllama(
-            model="saiga_llama3_8b:latest",
-            temperature=0.7,
-            num_ctx=4096,
-            streaming=True,
-        )
+
     async def process_user_message(
-        self,
-        chat_id: int,
-        content: str,
-        user_id: int,
-        tts_options: dict | None = None
+            self,
+            chat_id: int,
+            content: str,
+            user_id: int,
+            tts_options: dict | None = None
     ) -> None:
         """
         Обрабатывает сообщение пользователя:
           1. сохраняет и публикует сообщение пользователя
           2. создаёт пустое сообщение от модели
-          3. формирует историю чата
-          4. стримит ответ от LLM
+          3. формирует историю чата (БЕЗ нового сообщения)
+          4. ! ЗАПУСКАЕТ АГЕНТА  со стримом
           5. сохраняет результат и TTS (если включён)
         """
         user_msg = await self._save_and_publish_user_message(chat_id, content, user_id)
@@ -47,13 +48,22 @@ class ChatService:
         if not model_msg:
             return
 
-        messages = await self._build_message_history(chat_id, content)
+        # ! ИЗМЕНЕНО: Строим историю БЕЗ нового сообщения
+        messages = await self._build_message_history(chat_id)
 
-        final_content = await self._stream_llm_response(chat_id, model_msg.id, messages)
+        # ! ИЗМЕНЕНО: Вызываем AgentService вместо _stream_llm_response
+        final_content = await self.agent_service.arun_agent_stream(
+            chat_id=chat_id,
+            model_msg_id=model_msg.id,
+            input_query=content,  # Новый запрос передается сюда
+            history_messages=messages,  # История передается сюда
+            broadcaster=self.broadcaster
+        )
 
         if final_content:
             await self.message_repo.update_message_content(model_msg.id, final_content)
             await self._maybe_generate_tts(chat_id, model_msg.id, final_content, tts_options)
+
 
     async def _save_and_publish_user_message(self, chat_id: int, content: str, user_id: int):
         """Сохраняет и публикует сообщение пользователя."""
@@ -91,43 +101,44 @@ class ChatService:
             print(f"Error creating placeholder model message: {e}")
             return None
 
-    async def _build_message_history(self, chat_id: int, new_message: str, limit: int = 50):
-        """Формирует историю сообщений для ChatOllama в виде списка ролей."""
+    # ! ИЗМЕНЕННЫЙ МЕТОД
+    async def _build_message_history(self, chat_id: int, limit: int = 50):
+        """
+        Формирует историю сообщений для Агента.
+        (Больше не добавляет 'new_message' в конец).
+        """
         try:
+            # get_recent_messages_for_chat должен вернуть и последнее сообщение
+            # пользователя, которое мы УЖЕ сохранили в _save_and_publish_user_message
             messages = await self.message_repo.get_recent_messages_for_chat(chat_id, limit)
-            result = []
+
+            # Системный промпт можно задавать и здесь, и в самом агенте
+            result = [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
 
             for m in messages:
                 if not m.content:
                     continue
+                # Пропускаем пустое сообщение модели, которое мы только что создали
+                if m.message_type == MessageType.MODEL and not m.content:
+                    continue
+
                 if m.message_type == MessageType.USER:
                     result.append(HumanMessage(content=m.content))
                 elif m.message_type == MessageType.MODEL:
                     result.append(AIMessage(content=m.content))
 
-            result.append(HumanMessage(content=new_message))
+            # ! УДАЛЕНО: result.append(HumanMessage(content=new_message))
             return result
         except Exception as e:
             print(f"Error building chat history: {e}")
-            return [HumanMessage(content=new_message)]
+            # Возвращаем пустую историю или только системный промпт
+            return [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
 
-    async def _stream_llm_response(self, chat_id: int, model_msg_id: int, messages: list):
-        full_text = []
-        try:
-            async for chunk in self.llm.astream(messages):
-                await self.broadcaster.publish_token(chat_id, model_msg_id, chunk.content)
-                if chunk.content:
-                    full_text.append(chunk.content)
-
-        except Exception as e:
-            print(f"Error during LLM stream: {e}")
-            await self.broadcaster.publish_token(chat_id, model_msg_id, "\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА]")
-
-        return "".join(full_text)
-
+    # ! МЕТОД _stream_llm_response - УДАЛЕН
+    # (Его логика теперь внутри AgentService.arun_agent_stream)
 
     async def _maybe_generate_tts(self, chat_id: int, msg_id: int, text: str, tts_options: dict | None):
-        """Генерирует TTS, если включено."""
+        """Генерирует TTS, если включено. (Без изменений)"""
         if not (tts_options and tts_options.get("voice_enabled") and self.tts_service):
             return
 

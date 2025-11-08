@@ -3,6 +3,7 @@ from dependency_injector import containers, providers
 from repositories.user_repo import UserRepository
 from repositories.chat_repo import ChatRepository
 from repositories.message_repo import MessageRepository
+from services.agent_service import AgentService
 from services.chat_service import ChatService
 from services.broadcaster_service import Broadcaster
 from db import get_session
@@ -60,10 +61,13 @@ class Container(containers.DeclarativeContainer):
 
     local_tts_service = providers.Singleton(LocalTextToVoiceService)
 
+    agent_service = providers.Singleton(AgentService)
+
     chat_service: providers.Factory[ChatService] = providers.Factory(
         ChatService,
         message_repo=message_repo,
         broadcaster=broadcaster,
+        agent_service=agent_service,
         tts_service=local_tts_service
     )
 
