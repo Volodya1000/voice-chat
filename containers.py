@@ -8,6 +8,10 @@ from services.broadcaster_service import Broadcaster
 from db import get_session
 from services.transcription_service import TranscriptionService
 from services.local_tts_service import LocalTextToVoiceService
+from settings.settings import AppSettings
+from services.document_service import DocumentService
+from storage.embedding_service import EmbeddingService
+from storage.qdrant_repo import QdrantRepository
 
 
 class Container(containers.DeclarativeContainer):
@@ -67,7 +71,29 @@ class Container(containers.DeclarativeContainer):
         TranscriptionService
     )
 
+    app_settings = providers.Singleton(AppSettings)
 
+    # Делегаты к вложенным настройкам
+    qdrant_settings = providers.Delegate(app_settings.provided.qdrant)
+    embedding_settings = providers.Delegate(app_settings.provided.embedding)
+    splitting_settings = providers.Delegate(app_settings.provided.splitting)
+
+    embedding_service = providers.Singleton(
+        EmbeddingService,
+        settings=embedding_settings(),
+    )
+    qdrant_repo = providers.Singleton(
+        QdrantRepository,
+        settings=qdrant_settings(),
+        embedding_dim=embedding_service.provided.dim,
+    )
+
+    document_service = providers.Factory(
+        DocumentService,
+        embedding_service=embedding_service,
+        qdrant_repo=qdrant_repo,
+        splitting_settings=splitting_settings(),
+    )
 
 
 # Создаем единственный экземпляр контейнера для всего приложения

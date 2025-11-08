@@ -9,15 +9,6 @@ from services.local_tts_service import LocalTextToVoiceService
 
 
 class ChatService:
-    """
-    Сервис чата на базе ChatOllama:
-      - сохраняет сообщения
-      - формирует историю в виде списка сообщений
-      - вызывает модель через LangChain ChatOllama
-      - стримит токены пользователю
-      - при необходимости генерирует TTS
-    """
-
     def __init__(
         self,
         message_repo: MessageRepository,
@@ -33,10 +24,6 @@ class ChatService:
             num_ctx=4096,
             streaming=True,
         )
-
-    # -------------------------------------------------------------------------
-    # Основной метод
-    # -------------------------------------------------------------------------
     async def process_user_message(
         self,
         chat_id: int,
@@ -67,10 +54,6 @@ class ChatService:
         if final_content:
             await self.message_repo.update_message_content(model_msg.id, final_content)
             await self._maybe_generate_tts(chat_id, model_msg.id, final_content, tts_options)
-
-    # -------------------------------------------------------------------------
-    # Частные методы
-    # -------------------------------------------------------------------------
 
     async def _save_and_publish_user_message(self, chat_id: int, content: str, user_id: int):
         """Сохраняет и публикует сообщение пользователя."""
@@ -112,7 +95,7 @@ class ChatService:
         """Формирует историю сообщений для ChatOllama в виде списка ролей."""
         try:
             messages = await self.message_repo.get_recent_messages_for_chat(chat_id, limit)
-            result = [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
+            result = []
 
             for m in messages:
                 if not m.content:

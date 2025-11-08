@@ -1,38 +1,45 @@
-# endpoints/api_messages.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, HTTPException, Depends
 from dependency_injector.wiring import inject, Provide
 
-from dtos import (
-    MessageCreateDTO,
-    MessageDTO,
-)
 from containers import Container
-from repositories.message_repo import MessageRepository
-from models import MessageType
+from services.document_service import DocumentService
 
-# Обратите внимание на префикс роутера
-router = APIRouter(prefix="/api/chats")
+router = APIRouter(prefix="/api/chats", tags=["Documents"])
 
 
-@router.post("/{chat_id}/messages", response_model=MessageDTO) # <--- Путь изменен
+@router.post("/{chat_id}/upload")
 @inject
-async def add_message(
+async def upload_document(
     chat_id: int,
-    payload: MessageCreateDTO,
-    mr: MessageRepository = Depends(Provide[Container.message_repo])
+    file: UploadFile,
+    document_service: DocumentService = Depends(Provide[Container.document_service]),
 ):
+    """
+    Эндпоинт загрузки документа (PDF/DOCX):
+    - парсит файл,
+    - разбивает на чанки,
+    - создаёт эмбеддинги,
+    - сохраняет в Qdrant.
+    """
     try:
-        mtype = MessageType(payload.message_type.value)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid message_type")
-    msg = await mr.add_message(chat_id=chat_id, content=payload.content, message_type=mtype)
-    return MessageDTO.model_validate(msg)
+        file_bytes = await file.read()
+        await document_service.process_and_store(chat_id, file.filename, file_bytes)
+        return {"status": "ok", "filename": file.filename}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при обработке файла: {e}")
 
-@router.get("/{chat_id}/messages", response_model=list[MessageDTO]) # <--- Путь изменен
+
+@router.get("/{chat_id}/search")
 @inject
-async def get_messages(
+async def search_chunks(
     chat_id: int,
-    mr: MessageRepository = Depends(Provide[Container.message_repo])
+    query: str,
+    document_service: DocumentService = Depends(Provide[Container.document_service]),
 ):
-    msgs = await mr.get_messages_for_chat(chat_id)
-    return [MessageDTO.model_validate(m) for m in msgs]
+    """
+    Поиск релевантных чанков по текстовому запросу в Qdrant.
+    """
+    results = document_service.search(chat_id, query)
+    return results

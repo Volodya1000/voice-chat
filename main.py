@@ -1,51 +1,49 @@
 # main.py
 import uvicorn
 from fastapi import FastAPI
-from db import init_db
-# --- ИЗМЕНЕНИЯ ---
-# Импортируем роутеры из новой директории
-from endpoints.web_pages import router as web_pages_router
-from endpoints.web_actions import router as web_actions_router
-from endpoints.api_users import router as api_users_router
-from endpoints.api_messages import router as api_messages_router
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
 from fastapi.staticfiles import StaticFiles
-from containers import container
 from contextlib import asynccontextmanager
 
-# --- ИЗМЕНЕНИЯ ---
-# Импортируем модули для 'wire'
-import endpoints.web_pages as web_pages_module
-import endpoints.web_actions as web_actions_module
-import endpoints.api_users as api_users_module
-import endpoints.api_messages as api_messages_module
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
+from db import init_db
+from containers import container
 
-import services.chat_service as chat_service_module
+from endpoints import (
+    web_pages,
+    web_actions,
+    api_users,
+    api_messages,
+    api_documents,
+)
+import services.chat_service as chat_service
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     yield
 
+
 app = FastAPI(title="Async Chat App with DTOs & Repositories", lifespan=lifespan)
 
 container.wire(modules=[
-    web_pages_module,
-    web_actions_module,
-    api_users_module,
-    api_messages_module,
-    chat_service_module
+    web_pages,
+    web_actions,
+    api_users,
+    api_messages,
+    api_documents,
+    chat_service,
 ])
 
-app.include_router(web_pages_router)
-app.include_router(web_actions_router)
-app.include_router(api_users_router)
-app.include_router(api_messages_router)
+for router in [
+    web_pages.router,
+    web_actions.router,
+    api_users.router,
+    api_messages.router,
+    api_documents.router,
+]:
+    app.include_router(router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)

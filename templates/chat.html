@@ -10,13 +10,28 @@
 
       <form id="send-form" class="send-form">
         <input name="content" id="message-input" placeholder="Введите сообщение..." required />
-           <label>
-        <input type="checkbox" id="voice-response-checkbox" />
-        Голосовой ответ
-      </label>
+            <label>
+          <input type="checkbox" id="voice-response-checkbox" />
+          Голосовой ответ
+        </label>
         <button type="button" id="voice-record-button" title="Голосовой ввод (Серверная транскрипция)">
           <span id="voice-icon">🎤</span>
         </button>
+
+        <input
+          type="file"
+          id="document-upload-input"
+          accept=".docx, .pdf"
+          style="display: none;"
+        />
+        <button
+          type="button"
+          id="document-upload-button"
+          title="Загрузить документ (.docx, .pdf)"
+        >
+          📄
+        </button>
+
         <button type="submit">Отправить</button>
       </form>
 
@@ -25,14 +40,11 @@
           <button id="play-audio-button" type="button">🔊 Прослушать последнее аудио</button>
         </div>
 
-      <!-- Кнопка для открытия/закрытия панели -->
       <button id="toggle-tts-panel" class="toggle-btn">🎧 Настройки озвучки</button>
 
-      <!-- Сворачиваемая панель -->
       <section id="tts-settings" class="tts-settings hidden">
         <h3>🎧 Настройки озвучки</h3>
 
-        <!-- Выбор диктора -->
         <label for="voice-select">Голос:</label>
         <select id="voice-select" name="speaker">
           {% set default_speakers = ['aidar', 'baya', 'kseniya', 'xenia', 'eugene', 'random'] %}
@@ -41,26 +53,21 @@
           {% endfor %}
         </select>
 
-        <!-- Скорость -->
         <div class="slider-group">
-          <!-- Изменил span id на соответствующий input id + '-value' -->
           <label for="speed-range">Скорость: <span id="speed-range-value">1.0</span>x</label>
           <input type="range" id="speed-range" name="speed" min="0.2" max="3.0" value="1.0" step="0.1">
         </div>
 
-        <!-- Высота тона -->
         <div class="slider-group">
           <label for="pitch-range">Высота тона (полутона): <span id="pitch-range-value">0</span></label>
           <input type="range" id="pitch-range" name="pitch" min="-12" max="12" value="0" step="1">
         </div>
 
-        <!-- Громкость -->
         <div class="slider-group">
           <label for="gain-range">Громкость (дБ): <span id="gain-range-value">0</span></label>
           <input type="range" id="gain-range" name="gain_db" min="-30" max="10" value="0" step="1">
         </div>
 
-        <!-- Реверберация -->
         <div class="slider-group">
           <label for="reverb-time">Реверберация (сек): <span id="reverb-time-value">0.0</span></label>
           <input type="range" id="reverb-time" name="reverb_time" min="0" max="5" step="0.1" value="0">
@@ -79,11 +86,106 @@
 
 {% if selected_chat %}
 <script>
+  // Контекст чата, как и был
   window.__CHAT_CONTEXT = {
     selected_chat: {{ selected_chat|tojson }},
     initial_messages: {{ initial_messages|default([])|tojson }}
   };
-</script>
+
+  // // Добавляем DOMContentLoaded, чтобы скрипт точно ждал отрисовки
+  document.addEventListener('DOMContentLoaded', () => {
+
+    // Получаем ссылки на элементы
+    const uploadButton = document.getElementById('document-upload-button');
+    const fileInput = document.getElementById('document-upload-input');
+    const loadingIndicator = document.getElementById('loading-indicator');
+
+    // Убедимся, что все элементы найдены
+    if (!uploadButton) {
+      console.error('Не найдена кнопка document-upload-button');
+      return;
+    }
+    if (!fileInput) {
+      console.error('Не найден input document-upload-input');
+      return;
+    }
+
+    // 1. При нажатии на кнопку "📄" - кликаем на скрытое поле
+    uploadButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    // 2. Когда пользователь выбрал файл (событие 'change')
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+
+      if (!file) {
+        return; // Файл не выбран
+      }
+
+      // 3. Получаем ID чата из контекста
+      // Добавим лог, как в вашем примере, для отладки
+      console.log('Попытка загрузки файла. Контекст:', window.__CHAT_CONTEXT);
+
+      // Проверяем наличие chat_id более надежно
+      let chat_id;
+        if (window.__CHAT_CONTEXT && window.__CHAT_CONTEXT.selected_chat !== undefined) {
+            // Если это объект с id
+            if (typeof window.__CHAT_CONTEXT.selected_chat === 'object') {
+                chat_id = window.__CHAT_CONTEXT.selected_chat.id;
+            } else {
+                // Если это просто число
+                chat_id = window.__CHAT_CONTEXT.selected_chat;
+            }
+        }
+
+      console.log('Найденный chat_id:', chat_id);
+
+      // **ИСПРАВЛЕННАЯ ПРОВЕРКА:**
+      // Раньше было if (!chat_id), что неверно для id: 0
+      if (chat_id === undefined || chat_id === null) {
+        console.error('Не найден ID чата (chat_id). Загрузка отменена.', window.__CHAT_CONTEXT);
+        alert('Ошибка: Не удалось определить ID чата. Не могу загрузить файл.');
+        return;
+      }
+
+      // 4. Создаем FormData для отправки
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // 5. Показываем индикатор загрузки
+      if (loadingIndicator) loadingIndicator.style.display = 'block';
+
+      try {
+        // 6. Отправляем запрос на эндпоинт
+        const response = await fetch(`/api/chats/${chat_id}/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        // 7. Обрабатываем ответ
+        if (response.ok) {
+          const result = await response.json();
+          console.log('Файл успешно загружен:', result);
+          alert(`Файл "${file.name}" успешно загружен.`);
+        } else {
+          const errorData = await response.json();
+          console.error('Ошибка загрузки:', errorData);
+          alert(`Ошибка загрузки: ${errorData.detail || 'Неизвестная ошибка'}`);
+        }
+      } catch (error) {
+        console.error('Ошибка сети:', error);
+        alert('Произошла сетевая ошибка. Попробуйте еще раз.');
+      } finally {
+        // 8. Скрываем индикатор загрузки
+        if (loadingIndicator) loadingIndicator.style.display = 'none';
+
+        // 9. Сбрасываем значение input
+        event.target.value = null;
+      }
+    });
+  });
+  // </script>
 {% endif %}
 
 {% endblock %}
