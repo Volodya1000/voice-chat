@@ -33,34 +33,46 @@ class ChatService:
     ) -> None:
         """
         Обрабатывает сообщение пользователя:
-          1. сохраняет и публикует сообщение пользователя
-          2. создаёт пустое сообщение от модели
-          3. формирует историю чата (БЕЗ нового сообщения)
-          4. ! ЗАПУСКАЕТ АГЕНТА  со стримом
-          5. сохраняет результат и TTS (если включён)
+          1. Сохраняет и публикует сообщение пользователя
+          2. Создаёт пустое сообщение от модели
+          3. Формирует историю чата (без нового сообщения)
+          4. Запускает агента и стримит токены
+          5. Сохраняет финальный текст и TTS (если включён)
         """
+        # 1. Сохраняем и публикуем сообщение пользователя
         user_msg = await self._save_and_publish_user_message(chat_id, content, user_id)
         if not user_msg:
             return
 
+        # 2. Создаём пустое сообщение модели
         model_msg = await self._create_placeholder_model_message(chat_id)
         if not model_msg:
             return
 
+        # 3. Формируем историю чата
         messages = await self._build_message_history(chat_id)
 
-        final_content = await self.agent_service.arun_agent_stream(
-            chat_id=chat_id,
-            model_msg_id=model_msg.id,
-            input_query=content,
-            history_messages=messages,
-            broadcaster=self.broadcaster
-        )
+        # 4. Запуск агента и стрим токенов
+        final_text_parts = []
+        try:
+            async for token in self.agent_service.arun_agent_stream(
+                    chat_id=chat_id,
+                    input_query=content,
+                    history_messages=messages
+            ):
+                final_text_parts.append(token)
+                # Публикуем токен через broadcaster
+                await self.broadcaster.publish_token(chat_id, model_msg.id, token)
+        except Exception as e:
+            error_msg = f"\n[ОШИБКА АГЕНТА]: {e}"
+            final_text_parts.append(error_msg)
+            await self.broadcaster.publish_token(chat_id, model_msg.id, error_msg)
 
+        # 5. Сохраняем финальный текст модели
+        final_content = "".join(final_text_parts)
         if final_content:
             await self.message_repo.update_message_content(model_msg.id, final_content)
             await self._maybe_generate_tts(chat_id, model_msg.id, final_content, tts_options)
-
 
     async def _save_and_publish_user_message(self, chat_id: int, content: str, user_id: int):
         """Сохраняет и публикует сообщение пользователя."""

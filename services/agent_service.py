@@ -1,6 +1,6 @@
 # agent_service.py
 import asyncio
-from typing import List
+from typing import List, AsyncGenerator
 from functools import partial
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
@@ -32,7 +32,7 @@ class AgentService:
 
         # 1. Инициализация LLM
         self.llm = ChatOllama(
-            model="minimax-m2:cloud",
+            model="qwen2.5-coder:14b",
             temperature=0.3,
             num_ctx=4096,
             streaming=True
@@ -41,27 +41,21 @@ class AgentService:
         # 2. Инструменты
         math_chain = LLMMathChain.from_llm(llm=self.llm)
 
-        reasoning_prompt = PromptTemplate(
-            input_variables=["question"],
-            template="Ты аналитический агент. Ответь шаг за шагом: {question}"
-        )
-        reasoning_chain = LLMChain(llm=self.llm, prompt=reasoning_prompt)
-
         self.base_tools = [
             Tool(
                 name="MathCalculator",
                 func=math_chain.run,
-                description="Решает математические выражения и задачи"
+                description="Solves mathematical expressions and computational tasks."
             ),
             Tool(
                 name="WeatherAPI",
                 func=get_weather,
-                description="Получает погоду по запросу"
+                description="Retrieves current weather information based on a user query."
             ),
             Tool(
                 name="LibraryAPI",
                 func=query_library,
-                description="Ищет информацию в библиотеке компании"
+                description="Searches for information within the company's internal library."
             )
         ]
 
@@ -121,17 +115,17 @@ class AgentService:
         )
 
     async def arun_agent_stream(
-        self,
-        chat_id: int,
-        model_msg_id: int,
-        input_query: str,
-        history_messages: List[BaseMessage],
-        broadcaster: Broadcaster
-    ) -> str:
+            self,
+            chat_id: int,
+            input_query: str,
+            history_messages: List[BaseMessage]
+    ) -> AsyncGenerator[str, None]:
+        """
+        Генератор токенов от агента.
+        Не зависит от Broadcaster, просто отдаёт токены по мере генерации.
+        """
         full_text = []
-
         agent_executor = self._get_agent_executor(chat_id)
-
         input_data = {
             "input": input_query,
             "chat_history": history_messages
@@ -143,15 +137,12 @@ class AgentService:
                     token = chunk["output"]
                     if token:
                         full_text.append(token)
-                        await broadcaster.publish_token(chat_id, model_msg_id, token)
+                        yield token  # <-- просто отдаём токен
 
                 if "intermediate_steps" in chunk and chunk["intermediate_steps"]:
                     print(f"[Agent Step]: {chunk['intermediate_steps']}")
 
         except Exception as e:
-            print(f"Error during Agent stream: {e}")
-            error_msg = "\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА АГЕНТОМ]"
-            await broadcaster.publish_token(chat_id, model_msg_id, error_msg)
+            error_msg = f"\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА АГЕНТОМ]: {e}"
             full_text.append(error_msg)
-
-        return "".join(full_text)
+            yield error_msg
