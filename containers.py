@@ -61,15 +61,9 @@ class Container(containers.DeclarativeContainer):
 
     local_tts_service = providers.Singleton(LocalTextToVoiceService)
 
-    agent_service = providers.Singleton(AgentService)
 
-    chat_service: providers.Factory[ChatService] = providers.Factory(
-        ChatService,
-        message_repo=message_repo,
-        broadcaster=broadcaster,
-        agent_service=agent_service,
-        tts_service=local_tts_service
-    )
+
+
 
     transcription_service: providers.Singleton[TranscriptionService] = providers.Singleton(
         TranscriptionService
@@ -97,6 +91,19 @@ class Container(containers.DeclarativeContainer):
         embedding_service=embedding_service,
         qdrant_repo=qdrant_repo,
         splitting_settings=splitting_settings(),
+    )
+
+    agent_service = providers.Singleton(
+        AgentService,
+        document_service=document_service,
+    )
+
+    chat_service: providers.Factory[ChatService] = providers.Factory(
+        ChatService,
+        message_repo=message_repo,
+        broadcaster=broadcaster,
+        agent_service=agent_service,
+        tts_service=local_tts_service
     )
 
 

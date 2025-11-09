@@ -1,5 +1,4 @@
 # file: services/chat_service.py
-# (Остальные импорты оставлены как есть)
 
 import os
 from langchain.messages import AIMessage, HumanMessage, SystemMessage
@@ -48,15 +47,13 @@ class ChatService:
         if not model_msg:
             return
 
-        # ! ИЗМЕНЕНО: Строим историю БЕЗ нового сообщения
         messages = await self._build_message_history(chat_id)
 
-        # ! ИЗМЕНЕНО: Вызываем AgentService вместо _stream_llm_response
         final_content = await self.agent_service.arun_agent_stream(
             chat_id=chat_id,
             model_msg_id=model_msg.id,
-            input_query=content,  # Новый запрос передается сюда
-            history_messages=messages,  # История передается сюда
+            input_query=content,
+            history_messages=messages,
             broadcaster=self.broadcaster
         )
 
@@ -84,7 +81,6 @@ class ChatService:
             return None
 
     async def _create_placeholder_model_message(self, chat_id: int):
-        """Создаёт пустое сообщение для будущего ответа модели."""
         try:
             msg = await self.message_repo.add_message(
                 chat_id=chat_id,
@@ -101,24 +97,18 @@ class ChatService:
             print(f"Error creating placeholder model message: {e}")
             return None
 
-    # ! ИЗМЕНЕННЫЙ МЕТОД
     async def _build_message_history(self, chat_id: int, limit: int = 50):
-        """
-        Формирует историю сообщений для Агента.
-        (Больше не добавляет 'new_message' в конец).
-        """
         try:
-            # get_recent_messages_for_chat должен вернуть и последнее сообщение
-            # пользователя, которое мы УЖЕ сохранили в _save_and_publish_user_message
             messages = await self.message_repo.get_recent_messages_for_chat(chat_id, limit)
 
-            # Системный промпт можно задавать и здесь, и в самом агенте
-            result = [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
+            if messages and messages[-1].message_type == MessageType.USER:
+                messages = messages[:-1]
+            result = [SystemMessage(content="Ты — полезный помощник».")]
 
             for m in messages:
                 if not m.content:
                     continue
-                # Пропускаем пустое сообщение модели, которое мы только что создали
+
                 if m.message_type == MessageType.MODEL and not m.content:
                     continue
 
@@ -127,18 +117,13 @@ class ChatService:
                 elif m.message_type == MessageType.MODEL:
                     result.append(AIMessage(content=m.content))
 
-            # ! УДАЛЕНО: result.append(HumanMessage(content=new_message))
             return result
         except Exception as e:
             print(f"Error building chat history: {e}")
-            # Возвращаем пустую историю или только системный промпт
             return [SystemMessage(content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр».")]
 
-    # ! МЕТОД _stream_llm_response - УДАЛЕН
-    # (Его логика теперь внутри AgentService.arun_agent_stream)
 
     async def _maybe_generate_tts(self, chat_id: int, msg_id: int, text: str, tts_options: dict | None):
-        """Генерирует TTS, если включено. (Без изменений)"""
         if not (tts_options and tts_options.get("voice_enabled") and self.tts_service):
             return
 

@@ -1,3 +1,4 @@
+# agent_service.py
 import asyncio
 from typing import List
 from functools import partial
@@ -11,12 +12,7 @@ from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
 from services.broadcaster_service import Broadcaster
-
-
-def query_rag(query: str, chat_id: int | None = None) -> str:
-    print(f"[Agent Tool] RAG query: '{query}' for chat_id={chat_id}")
-    return f"[RAG]: найден контент по '{query}' (chat_id={chat_id})"
-
+from services.document_service import DocumentService
 
 def get_weather(query: str) -> str:
     """Пример API инструмента погоды."""
@@ -30,21 +26,19 @@ def query_library(query: str) -> str:
     return f"Результаты поиска в библиотеке по запросу '{query}'."
 
 
-# -------------------------------------------------------------------------
-# Сервис Агента
-# -------------------------------------------------------------------------
-
 class AgentService:
-    def __init__(self):
-        # 1. Инициализируем LLM
+    def __init__(self, document_service: DocumentService):
+        self.document_service = document_service
+
+        # 1. Инициализация LLM
         self.llm = ChatOllama(
-            model="evilfreelancer/rugpt3.5:13b-q5_0",
+            model="minimax-m2:cloud",
             temperature=0.3,
             num_ctx=4096,
             streaming=True
         )
 
-        # 2. Инициализируем базовые инструменты (chains)
+        # 2. Инструменты
         math_chain = LLMMathChain.from_llm(llm=self.llm)
 
         reasoning_prompt = PromptTemplate(
@@ -53,17 +47,11 @@ class AgentService:
         )
         reasoning_chain = LLMChain(llm=self.llm, prompt=reasoning_prompt)
 
-        # Сохраняем инструменты, которые не зависят от chat_id
         self.base_tools = [
             Tool(
                 name="MathCalculator",
                 func=math_chain.run,
                 description="Решает математические выражения и задачи"
-            ),
-            Tool(
-                name="ReasoningTool",
-                func=reasoning_chain.run,
-                description="Используется для логических и рассуждающих задач"
             ),
             Tool(
                 name="WeatherAPI",
@@ -77,77 +65,86 @@ class AgentService:
             )
         ]
 
-        # 3. Базовый промпт для ReAct агента с поддержкой истории
+        # 3. Промпт агента
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(
-                    content="Ты — полезный помощник для сотрудников компании УП «Белтехосмотр». Используй доступные инструменты для ответа на вопросы."),
-                # MessagesPlaceholder отвечает за вставку истории
+                    content="Ты — полезный помощник. Используй доступные инструменты для ответа на вопросы."
+                ),
                 MessagesPlaceholder(variable_name="chat_history"),
                 ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),  # для шагов ReAct
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
 
+    # ---------------------------------------------------------------------
+    # Инструмент RAG, асинхронный
+    # ---------------------------------------------------------------------
+    async def _rag_tool_async(self, chat_id: int, query: str) -> str:
+        """
+        Асинхронный вызов поиска по документам через DocumentService.
+        """
+        results = await self.document_service.search(chat_id, query, top_k=5)
+        if not results:
+            return f"[RAG]: не найдено информации по запросу '{query}'"
+
+        # Исправлено: доступ по ключу 'text'
+        return "\n".join([f"- {r['text'][:300]}..." for r in results])
+
+    # Обертка для синхронного вызова в Tool
+    def _rag_tool(self, chat_id: int, query: str) -> str:
+        return asyncio.run(self._rag_tool_async(chat_id, query))
+
+    # ---------------------------------------------------------------------
+    # Создание AgentExecutor
+    # ---------------------------------------------------------------------
     def _get_agent_executor(self, chat_id: int) -> AgentExecutor:
-        """
-        Создает RAG-инструмент с chat_id и собирает AgentExecutor.
-        """
-        # 4. Создаем RAG-инструмент с привязкой chat_id
         rag_tool = Tool(
             name="RAG",
-            func=partial(query_rag, chat_id=chat_id),
-            description="Используется для поиска информации в прикреплённых документах"
+            func=partial(self._rag_tool, chat_id),
+            description="Используется для поиска дополнительной информации по вопросам, когда знаний модели недостаточно"
         )
 
         all_tools = self.base_tools + [rag_tool]
 
-        # 5. Создаем Agent с корректным вызовом
         agent = create_tool_calling_agent(
             self.llm,
             all_tools,
             self.prompt,
         )
 
-        # 6. Создаем Agent Executor (запускает агент и выполняет инструменты)
         return AgentExecutor.from_agent_and_tools(
             agent=agent,
             tools=all_tools,
             verbose=True,
-            handle_parsing_errors=True  # Обработка ошибок парсинга
+            handle_parsing_errors=True
         )
 
     async def arun_agent_stream(
-            self,
-            chat_id: int,
-            model_msg_id: int,
-            input_query: str,
-            history_messages: List[BaseMessage],
-            broadcaster: Broadcaster
+        self,
+        chat_id: int,
+        model_msg_id: int,
+        input_query: str,
+        history_messages: List[BaseMessage],
+        broadcaster: Broadcaster
     ) -> str:
         full_text = []
 
-        # Получаем исполнителя агента
         agent_executor = self._get_agent_executor(chat_id)
 
         input_data = {
             "input": input_query,
-            # Ключ должен соответствовать placeholder'у в промпте
             "chat_history": history_messages
         }
 
         try:
-            # astream - асинхронно стримит все шаги агента
             async for chunk in agent_executor.astream(input_data):
-                # 'output' - это ключ, содержащий финальный ответ
                 if "output" in chunk:
                     token = chunk["output"]
                     if token:
                         full_text.append(token)
-                        # Публикуем токен через broadcaster
                         await broadcaster.publish_token(chat_id, model_msg_id, token)
 
-                # Вы можете добавить логирование промежуточных шагов для отладки
                 if "intermediate_steps" in chunk and chunk["intermediate_steps"]:
                     print(f"[Agent Step]: {chunk['intermediate_steps']}")
 
