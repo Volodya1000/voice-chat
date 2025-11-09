@@ -11,16 +11,18 @@ from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
 from services.document_service import DocumentService
+from services.reranker import LLMReranker
 from tools.library_tools import get_available_book_count_by_author, get_book_info, get_last_book_from_author, \
     get_book_author
 from tools.weather_tool import get_weather
 
-
 class AgentService:
-    def __init__(self, document_service: DocumentService):
+    def __init__(self, document_service: DocumentService, llm_weight: float = 0.7,
+                 combined_score_threshold: float = 0.5):
+        self.document_service = document_service
+        self.llm_weight = llm_weight
         self.document_service = document_service
 
-        # 1. Инициализация LLM
         self.llm = ChatOllama(
             model="gpt-oss:20b-cloud",
             temperature=0.3,
@@ -28,7 +30,6 @@ class AgentService:
             streaming=True
         )
 
-        # 2. Инструменты
         math_chain = LLMMathChain.from_llm(llm=self.llm)
 
         self.base_tools = [
@@ -41,9 +42,13 @@ class AgentService:
                 )
             ),
             Tool(
-                name="WeatherAPI",
-                func=get_weather,
-                description="Retrieves current weather information based on a user query."
+                name="MathCalculator",
+                func=math_chain.run,
+                description=(
+                    "Calculates mathematical expressions and solves math problems. "
+                    "Always use this tool to answer any question related to mathematics. "
+                    "Do NOT attempt to answer math questions without using this tool."
+                )
             ),
             get_available_book_count_by_author,
             get_book_info,
@@ -51,16 +56,13 @@ class AgentService:
             get_book_author,
         ]
 
-        # 3. Промпт агента
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(
                     content=(
                         "Ты — полезный помощник. "
-                        "Если ты не знаешь точного ответа из своих знаний, "
-                        "обязательно используй инструмент 'RAG' для поиска информации в документах. "
-                        "Не придумывай факты."
-                        "Отвечай только на русском языке"
+                        "Используй только достоверную информацию из RAG и инструментов. "
+                        "Отвечай только на русском языке."
                     )
                 ),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -68,30 +70,10 @@ class AgentService:
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
-
-    async def _rag_tool_async(self, chat_id: int, query: str) -> str:
-        results = await self.document_service.search(chat_id, query, top_k=5)
-        if not results:
-            return f"[RAG]: не найдено информации по запросу '{query}'"
-
-        return "\n".join([f"- {r['text'][:300]}..." for r in results])
-
-    def _rag_tool(self, chat_id: int, query: str) -> str:
-        return asyncio.run(self._rag_tool_async(chat_id, query))
+        self.reranker = LLMReranker()
 
     def _get_agent_executor(self, chat_id: int) -> AgentExecutor:
-        rag_tool = Tool(
-            name="RAG",
-            func=partial(self._rag_tool, chat_id),
-            description=(
-                "Searches uploaded documents for information the model may not know. "
-                "Always use this tool when the model's knowledge may be insufficient. "
-                "Do NOT answer without using this tool if unsure."
-            )
-        )
-
-        all_tools = self.base_tools + [rag_tool]
-
+        all_tools = self.base_tools
         agent = create_tool_calling_agent(
             self.llm,
             all_tools,
@@ -105,16 +87,47 @@ class AgentService:
             handle_parsing_errors=True
         )
 
+    async def get_rag_context(self, chat_id: int, query: str) -> str:
+        """
+        Возвращает объединенный текст всех релевантных документов,
+        отфильтрованных по комбинированной оценке LLM + векторной.
+        """
+        results = await self.document_service.search(chat_id, query, top_k=20)
+
+        # Сортируем по score
+        sorted_results = sorted(results, key=lambda r: r["score"], reverse=True)
+
+        # Берем топ-5
+        top5 = sorted_results[:5]
+
+        # Логируем кратко: score + начало текста
+        print("[RAG LOG] Найдено чанков:", len(top5))
+        for idx, r in enumerate(top5, 1):
+            snippet = r["text"][:80].replace("\n", " ")  # первые 80 символов
+            print(f"  {idx}. score={r['score']:.3f}, text='{snippet}...'")
+
+        # Возвращаем текст
+        top5_texts = [r["text"] for r in top5]
+        return "\n".join(top5_texts)
+
     async def arun_agent_stream(
             self,
             chat_id: int,
             input_query: str,
             history_messages: List[BaseMessage]
     ) -> AsyncGenerator[str, None]:
+
+        # Всегда добавляем RAG контекст
+        rag_context = await self.get_rag_context(chat_id, input_query)
+        if rag_context:
+            full_input = f"[RAG контекст]:\n{rag_context}\n\n[Вопрос]: {input_query}"
+        else:
+            full_input = input_query
+
         full_text = []
         agent_executor = self._get_agent_executor(chat_id)
         input_data = {
-            "input": input_query,
+            "input": full_input,
             "chat_history": history_messages
         }
 
@@ -124,7 +137,7 @@ class AgentService:
                     token = chunk["output"]
                     if token:
                         full_text.append(token)
-                        yield token  # <-- просто отдаём токен
+                        yield token
 
                 if "intermediate_steps" in chunk and chunk["intermediate_steps"]:
                     print(f"[Agent Step]: {chunk['intermediate_steps']}")
