@@ -11,14 +11,13 @@ from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
 from services.document_service import DocumentService
-from services.reranker import LLMReranker
 from tools.library_tools import get_available_book_count_by_author, get_book_info, get_last_book_from_author, \
     get_book_author
 from tools.weather_tool import get_weather
 
 class AgentService:
     def __init__(self, document_service: DocumentService, llm_weight: float = 0.7,
-                 combined_score_threshold: float = 0.5):
+                 ):
         self.document_service = document_service
         self.llm_weight = llm_weight
         self.document_service = document_service
@@ -70,7 +69,6 @@ class AgentService:
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
-        self.reranker = LLMReranker()
 
     def _get_agent_executor(self, chat_id: int) -> AgentExecutor:
         all_tools = self.base_tools
@@ -98,7 +96,7 @@ class AgentService:
         sorted_results = sorted(results, key=lambda r: r["score"], reverse=True)
 
         # Берем топ-5
-        top5 = sorted_results[:5]
+        top5 = sorted_results[:10]
 
         # Логируем кратко: score + начало текста
         print("[RAG LOG] Найдено чанков:", len(top5))
