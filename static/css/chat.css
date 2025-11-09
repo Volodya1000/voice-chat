@@ -214,3 +214,215 @@
 .tts-buttons button {
   margin-right: 0.5rem;
 }
+
+
+
+
+
+
+
+
+
+
+.sidebar {
+  width: 260px;
+  background: #f7f7f9;
+  color: #222;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-right: 1px solid #e0e0e0;
+  box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+}
+
+.sidebar h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #333;
+}
+
+.chat-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: calc(100vh - 250px);
+}
+
+.chat-item {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: background 0.2s, box-shadow 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #e5e5e5;
+}
+
+.chat-item:hover {
+  background: #f4f4f4;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+.chat-item.active {
+  background: #eef3ff;
+  border: 1px solid #b8c9ff;
+}
+
+.chat-item a {
+  color: #222;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.chat-item a:hover {
+  text-decoration: underline;
+}
+
+.meta {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.new-chat-form {
+  display: flex;
+  gap: 8px;
+}
+
+.new-chat-form input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #222;
+  outline: none;
+  transition: border 0.2s, box-shadow 0.2s;
+}
+
+.new-chat-form input:focus {
+  border-color: #8ca8ff;
+  box-shadow: 0 0 0 3px rgba(140,168,255,0.3);
+}
+
+.new-chat-form button {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #5c7cfa;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.new-chat-form button:hover {
+  background: #4d6bdb;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.sidebar a[href="/logout"] {
+  margin-top: auto;
+  display: block;
+  padding: 10px 12px;
+  background: #ffffff;
+  text-align: center;
+  border-radius: 8px;
+  color: #333;
+  border: 1px solid #ddd;
+  text-decoration: none;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.sidebar a[href="/logout"]:hover {
+  background: #f2f2f2;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+}
+
+
+
+
+
+
+
+
+
+
+/* --- ЛОГИН СТРАНИЦА --- */
+
+/* Страница логина */
+.login-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+.login {
+  background: #ffffff;
+  padding: 40px 45px;
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+  width: 340px;
+  text-align: center;
+}
+
+.login h2 {
+  margin-bottom: 25px;
+  font-size: 1.6rem;
+  color: #333;
+  font-weight: 600;
+}
+
+.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+
+.login label {
+  font-size: 0.9rem;
+  color: #444;
+  font-weight: 500;
+}
+
+.login input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  font-size: 1rem;
+  background: #fff;
+  transition: border 0.2s, box-shadow 0.2s;
+}
+
+.login input:focus {
+  border-color: #8ca8ff;
+  box-shadow: 0 0 0 3px rgba(140,168,255,0.3);
+  outline: none;
+}
+
+.login button {
+  margin-top: 10px;
+  padding: 10px;
+  background: #5c7cfa;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.login button:hover {
+  background: #4d6bdb;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+
