@@ -4,26 +4,16 @@ from typing import List, AsyncGenerator
 from functools import partial
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
-from langchain_classic.chains.llm import LLMChain
 from langchain_classic.chains.llm_math.base import LLMMathChain
 from langchain_core.messages import BaseMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import Tool
 from langchain_ollama import ChatOllama
 
-from services.broadcaster_service import Broadcaster
 from services.document_service import DocumentService
-
-def get_weather(query: str) -> str:
-    """Пример API инструмента погоды."""
-    print(f"[Agent Tool] Weather query: '{query}'")
-    return "Погода в Минске: +7°C, облачно."
-
-
-def query_library(query: str) -> str:
-    """Пример API инструмента библиотеки."""
-    print(f"[Agent Tool] Library query: '{query}'")
-    return f"Результаты поиска в библиотеке по запросу '{query}'."
+from tools.library_tools import get_available_book_count_by_author, get_book_info, get_last_book_from_author, \
+    get_book_author
+from tools.weather_tool import get_weather
 
 
 class AgentService:
@@ -32,7 +22,7 @@ class AgentService:
 
         # 1. Инициализация LLM
         self.llm = ChatOllama(
-            model="qwen2.5-coder:14b",
+            model="gpt-oss:20b-cloud",
             temperature=0.3,
             num_ctx=4096,
             streaming=True
@@ -43,27 +33,35 @@ class AgentService:
 
         self.base_tools = [
             Tool(
-                name="MathCalculator",
-                func=math_chain.run,
-                description="Solves mathematical expressions and computational tasks."
+                name="WeatherAPI",
+                func=get_weather,
+                description=(
+                    "Retrieves current weather for a specified city. "
+                    "Use only this tool to answer questions about weather in cities."
+                )
             ),
             Tool(
                 name="WeatherAPI",
                 func=get_weather,
                 description="Retrieves current weather information based on a user query."
             ),
-            Tool(
-                name="LibraryAPI",
-                func=query_library,
-                description="Searches for information within the company's internal library."
-            )
+            get_available_book_count_by_author,
+            get_book_info,
+            get_last_book_from_author,
+            get_book_author,
         ]
 
         # 3. Промпт агента
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(
-                    content="Ты — полезный помощник. Используй доступные инструменты для ответа на вопросы."
+                    content=(
+                        "Ты — полезный помощник. "
+                        "Если ты не знаешь точного ответа из своих знаний, "
+                        "обязательно используй инструмент 'RAG' для поиска информации в документах. "
+                        "Не придумывай факты."
+                        "Отвечай только на русском языке"
+                    )
                 ),
                 MessagesPlaceholder(variable_name="chat_history"),
                 ("human", "{input}"),
@@ -71,32 +69,25 @@ class AgentService:
             ]
         )
 
-    # ---------------------------------------------------------------------
-    # Инструмент RAG, асинхронный
-    # ---------------------------------------------------------------------
     async def _rag_tool_async(self, chat_id: int, query: str) -> str:
-        """
-        Асинхронный вызов поиска по документам через DocumentService.
-        """
         results = await self.document_service.search(chat_id, query, top_k=5)
         if not results:
             return f"[RAG]: не найдено информации по запросу '{query}'"
 
-        # Исправлено: доступ по ключу 'text'
         return "\n".join([f"- {r['text'][:300]}..." for r in results])
 
-    # Обертка для синхронного вызова в Tool
     def _rag_tool(self, chat_id: int, query: str) -> str:
         return asyncio.run(self._rag_tool_async(chat_id, query))
 
-    # ---------------------------------------------------------------------
-    # Создание AgentExecutor
-    # ---------------------------------------------------------------------
     def _get_agent_executor(self, chat_id: int) -> AgentExecutor:
         rag_tool = Tool(
             name="RAG",
             func=partial(self._rag_tool, chat_id),
-            description="Используется для поиска дополнительной информации по вопросам, когда знаний модели недостаточно"
+            description=(
+                "Searches uploaded documents for information the model may not know. "
+                "Always use this tool when the model's knowledge may be insufficient. "
+                "Do NOT answer without using this tool if unsure."
+            )
         )
 
         all_tools = self.base_tools + [rag_tool]
@@ -120,10 +111,6 @@ class AgentService:
             input_query: str,
             history_messages: List[BaseMessage]
     ) -> AsyncGenerator[str, None]:
-        """
-        Генератор токенов от агента.
-        Не зависит от Broadcaster, просто отдаёт токены по мере генерации.
-        """
         full_text = []
         agent_executor = self._get_agent_executor(chat_id)
         input_data = {
