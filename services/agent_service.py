@@ -95,17 +95,16 @@ class AgentService:
         # Сортируем по score
         sorted_results = sorted(results, key=lambda r: r["score"], reverse=True)
 
-        # Берем топ-5
-        top5 = sorted_results[:10]
+        topn = sorted_results[:10]
 
         # Логируем кратко: score + начало текста
-        print("[RAG LOG] Найдено чанков:", len(top5))
-        for idx, r in enumerate(top5, 1):
+        print("[RAG LOG] Найдено чанков:", len(topn))
+        for idx, r in enumerate(topn, 1):
             snippet = r["text"][:80].replace("\n", " ")  # первые 80 символов
             print(f"  {idx}. score={r['score']:.3f}, text='{snippet}...'")
 
         # Возвращаем текст
-        top5_texts = [r["text"] for r in top5]
+        top5_texts = [r["text"] for r in topn]
         return "\n".join(top5_texts)
 
     async def arun_agent_stream(
