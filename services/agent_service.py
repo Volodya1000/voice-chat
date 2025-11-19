@@ -82,7 +82,9 @@ class AgentService:
             agent=agent,
             tools=all_tools,
             verbose=True,
-            handle_parsing_errors=True
+            handle_parsing_errors=True,
+            return_intermediate_steps=True
+
         )
 
     async def get_rag_context(self, chat_id: int, query: str) -> str:
@@ -129,6 +131,7 @@ class AgentService:
         }
 
         try:
+            used_tools = set()
             async for chunk in agent_executor.astream(input_data):
                 if "output" in chunk:
                     token = chunk["output"]
@@ -137,7 +140,17 @@ class AgentService:
                         yield token
 
                 if "intermediate_steps" in chunk and chunk["intermediate_steps"]:
+                    for step in chunk["intermediate_steps"]:
+                        tool_name = step[0].tool if hasattr(step[0], "tool") else None
+
+                        if tool_name:
+                            used_tools.add(tool_name)
                     print(f"[Agent Step]: {chunk['intermediate_steps']}")
+            if used_tools:
+                tools_list = ", ".join(sorted(used_tools))
+                conclusion = f"Для ответа были использованы инструменты: {tools_list}"
+                full_text.append(conclusion)
+                yield conclusion
 
         except Exception as e:
             error_msg = f"\n[ОШИБКА ГЕНЕРАЦИИ ОТВЕТА АГЕНТОМ]: {e}"
