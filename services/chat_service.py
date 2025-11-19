@@ -160,4 +160,6 @@ class ChatService:
             audio_url = f"/chats/{chat_id}/messages/{msg_id}/audio"
             await self.broadcaster.publish_audio(chat_id, msg_id, audio_url)
         except Exception as e:
-            print(f"TTS generation error for msg {msg_id}: {e}")
+            import traceback
+            print(f"TTS generation error for msg {msg_id}: {e!r}")
+            traceback.print_exc()
