@@ -216,10 +216,11 @@ class LocalTextToVoiceService:
         # -----------------------
         # Пост-обработка
         # -----------------------
-        wav = self._add_silence(wav, silence_before, silence_after)
+        # В методе synthesize_to_bytes измените порядок вызовов:
         wav = self._pitch_shift(wav, pitch_semitones)
         wav = self._time_stretch(wav, speed)
-        wav = self._add_reverb(wav, reverb_time, reverb_decay)
+        wav = self._add_silence(wav, silence_before, silence_after)
+        wav = self._add_reverb(wav, reverb_time, reverb_decay)  # Теперь регулируемые параметры работают!
         wav = self._normalize(wav)
         wav = self._change_volume(wav, gain_db)
 
@@ -268,28 +269,101 @@ class LocalTextToVoiceService:
         silence_after = np.zeros(a, dtype=np.float32)
         return np.concatenate([silence_before, wav, silence_after]).astype(np.float32)
 
-
     def _add_reverb(self, wav: np.ndarray, reverb_time: float, decay: float) -> np.ndarray:
-        # Проверяем корректность параметров
-        if reverb_time <= 0 or decay <= 0 or decay >= 1:
+        """
+        Параметрическая реверберация с плавным хвостом и устранением артефактов.
+        - reverb_time: 0-5 (размер комнаты)
+        - decay: 0-1 (интенсивность)
+        """
+        if reverb_time <= 0.001:
             return wav
 
-        # Создание импульсного отклика
-        n = int(self.sample_rate * reverb_time)
-        t = np.arange(n, dtype=np.float32)
-        ir = decay ** (t / n)
+        reverb_time = np.clip(reverb_time, 0.0, 5.0)
+        decay = np.clip(decay, 0.0, 1.0)
 
-        # Применение реверберации через свертку
-        convolved = np.convolve(wav, ir, mode='full')[:len(wav)]
+        if decay < 0.01:
+            return wav
 
-        # Добавление "мокрого" сигнала с уменьшенной громкостью
-        out = wav + convolved * 0.15  # Значение 0.1–0.25 можно регулировать
+        sr = self.sample_rate
+        length = len(wav)
 
-        # Нормализация только если пик превышает 1
-        peak = np.max(np.abs(out))
-        if peak > 1.0:
-            out /= peak
+        # Фиксированные задержки (не масштабируются, избегаем артефактов)
+        base_delays_ms = np.array([20, 30, 40, 50, 60, 70, 80, 90])
+        delay_samples = (base_delays_ms * sr / 1000).astype(int)
+        max_delay = np.max(delay_samples)
+        num_delays = len(delay_samples)
 
-        return out.astype(np.float32)
+        # Параметры:
+        # - reverb_time влияет на длину хвоста
+        # - decay влияет на интенсивность и feedback
+        wet_level = decay * 0.25  # 0..0.25
+        feedback = 0.3 + decay * 0.6  # 0.3..0.9
 
+        # Кольцевые буферы
+        delay_buffers = np.zeros((num_delays, max_delay), dtype=np.float32)
+        write_pos = np.zeros(num_delays, dtype=int)
+        normalization_gain = 1.0 / np.sqrt(num_delays)
+
+        # 1. Обработка основного сигнала
+        output = np.zeros(length, dtype=np.float32)
+
+        for i in range(length):
+            # Чтение из задержек
+            read_indices = (write_pos - delay_samples) % max_delay
+            wet_signals = delay_buffers[np.arange(num_delays), read_indices]
+
+            wet_sum = np.sum(wet_signals) * normalization_gain
+
+            # Запись: вход + обратная связь
+            delay_buffers[np.arange(num_delays), write_pos] = wav[i] + feedback * wet_signals
+
+            write_pos = (write_pos + 1) % max_delay
+
+            # Смешивание: dry + wet
+            output[i] = wav[i] * (1.0 - wet_level * 0.5) + wet_sum * wet_level
+
+        # 2. Хвост (только обратная связь)
+        #  делаем хвост КОРОЧЕ, но с АГРЕССИВНЫМ fade ===
+        tail_length = min(int(sr * reverb_time * 0.15), 2000)  # Максимум ~0.04 сек
+
+        if tail_length > 0:
+            tail = np.zeros(tail_length, dtype=np.float32)
+
+            # Предрасчет экспоненциального затухания
+            fade_curve = np.exp(-5.0 * np.arange(tail_length) / tail_length)
+
+            for i in range(tail_length):
+                # Чтение
+                read_indices = (write_pos - delay_samples) % max_delay
+                wet_signals = delay_buffers[np.arange(num_delays), read_indices]
+
+                wet_sum = np.sum(wet_signals) * normalization_gain
+
+                # Запись: ТОЛЬКО обратная связь (без нового входа)
+                delay_buffers[np.arange(num_delays), write_pos] = feedback * wet_signals
+
+                write_pos = (write_pos + 1) % max_delay
+
+                # Применяем fade и уровень
+                tail[i] = wet_sum * wet_level * fade_curve[i]
+
+            # === ФИНАЛЬНЫЙ ФИКС: обнуляем последние 10 сэмплов ===
+            if tail_length > 10:
+                tail[-10:] = 0.0
+
+            output = np.concatenate([output, tail])
+
+        # 3. Финальная обработка
+        # Убираем DC offset
+        output = output - np.mean(output)
+
+        # Нормализация
+        peak = np.max(np.abs(output))
+        if peak > 0.95:
+            output = output * (0.95 / peak)
+
+        # Защита от артефактов: hard clip
+        output = np.clip(output, -0.99, 0.99)
+
+        return output.astype(np.float32)
 
