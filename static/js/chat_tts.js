@@ -83,11 +83,10 @@ export function setupTTS(ttsButton, messageInput) {
     });
   }
 
-  if (playButton) {
-    playButton.addEventListener('click', () => {
-      if (!lastAudioUrl) return alert("Нет сохранённого аудио. Сначала нажмите «Озвучить текст».");
-      const audio = new Audio(lastAudioUrl);
-      audio.play();
-    });
-  }
+  // if (playButton) {
+  //   playButton.addEventListener('click', () => {
+  //     const audio = new Audio(lastAudioUrl);
+  //     audio.play();
+  //   });
+  // }
 }
